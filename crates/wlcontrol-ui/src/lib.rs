@@ -397,7 +397,7 @@ ShellRoot {
 
           Row {
             width: parent.width
-            height: 24
+            height: 26
             spacing: 10
             Text {
               color: "#cdd6f4"
@@ -443,43 +443,28 @@ ShellRoot {
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.top: parent.top
-                  anchors.margins: 9
+                  anchors.margins: 8
                   spacing: 6
 
-                  Row {
+                  Item {
                     width: parent.width
                     height: 30
-                    spacing: 8
 
                     Text {
+                      id: stateDot
+                      width: 20
+                      anchors.left: parent.left
                       anchors.verticalCenter: parent.verticalCenter
                       color: root.vmDotColor(vm)
                       font.pixelSize: 15
+                      horizontalAlignment: Text.AlignHCenter
                       text: root.vmGlyph(vm)
                     }
 
-                    Column {
-                      width: parent.width - 98
-                      spacing: 1
-                      Text {
-                        width: parent.width
-                        color: "#cdd6f4"
-                        font.pixelSize: 14
-                        font.bold: true
-                        elide: Text.ElideRight
-                        text: vm.name
-                      }
-                      Text {
-                        width: parent.width
-                        color: "#a6adc8"
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
-                        text: root.vmMeta(vm)
-                      }
-                    }
-
                     Row {
+                      id: actionButtons
                       spacing: 6
+                      anchors.right: parent.right
                       anchors.verticalCenter: parent.verticalCenter
                       IconButton {
                         text: vm.state === "running" ? "stop" : "play_arrow"
@@ -495,6 +480,30 @@ ShellRoot {
                         accent: "#89b4fa"
                         enabled: root.state.connectivity === "connected"
                         onClicked: expanded = !expanded
+                      }
+                    }
+
+                    Column {
+                      anchors.left: stateDot.right
+                      anchors.leftMargin: 8
+                      anchors.right: actionButtons.left
+                      anchors.rightMargin: 8
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: 1
+                      Text {
+                        width: parent.width
+                        color: "#cdd6f4"
+                        font.pixelSize: 14
+                        font.bold: true
+                        elide: Text.ElideRight
+                        text: vm.name
+                      }
+                      Text {
+                        width: parent.width
+                        color: "#a6adc8"
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                        text: root.vmMeta(vm)
                       }
                     }
                   }
@@ -530,11 +539,6 @@ ShellRoot {
                     visible: expanded
                     width: parent.width
                     spacing: 8
-                    Text {
-                      color: "#a6adc8"
-                      font.pixelSize: 11
-                      text: (vm.readiness && vm.readiness.length > 0) ? ("ready: " + vm.readiness.join(", ")) : "readiness not reported"
-                    }
                     ControlChip { icon: "terminal"; label: "terminal"; tooltip: root.state.role === "admin" ? "Open terminal" : "Requires admin role"; accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
                     ControlChip { icon: "restart_alt"; label: "restart"; tooltip: "Restart VM"; accent: "#fab387"; enabled: root.canAdvanced(vm); onClicked: root.action(["restart", vm.name]) }
                     ControlChip { icon: "verified"; label: "verify"; tooltip: "Verify store"; accent: "#f9e2af"; enabled: root.canMutate(); onClicked: root.action(["store-verify", vm.name]) }
@@ -615,6 +619,7 @@ ShellRoot {
         color: parent.parent.accent
         font.family: "Material Symbols Rounded"
         font.pixelSize: 16
+        height: parent.parent.height
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         text: parent.parent.icon
@@ -623,6 +628,8 @@ ShellRoot {
         color: parent.parent.accent
         font.pixelSize: 10
         font.bold: true
+        height: parent.parent.height
+        verticalAlignment: Text.AlignVCenter
         text: parent.parent.label
       }
     }
