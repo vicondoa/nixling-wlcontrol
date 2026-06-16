@@ -17,6 +17,17 @@ use wlcontrol_core::{Config, WlError, WlResult};
 
 const QML_FILE: &str = "shell.qml";
 const PID_FILE: &str = "quickshell.pid";
+const SIGTERM: i32 = 15;
+
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessIdentity {
+    pid: u32,
+    start_time_ticks: u64,
+}
 
 /// Open or hide the Quickshell control popup.
 ///
@@ -29,10 +40,12 @@ pub fn open(_config: &Config) -> WlResult<()> {
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
 
     let pid_path = dir.join(PID_FILE);
-    if let Some(pid) = read_live_pid(&pid_path) {
+    if let Some(identity) = read_live_frontend(&pid_path, &dir) {
         // Toggle hide. Quickshell is the direct child we launched, and the pid
         // file lives in a private 0700 runtime dir.
-        let _ = Command::new("kill").arg(pid.to_string()).status();
+        // SAFETY: pid is validated against /proc start_time and cmdline before
+        // signaling. If the process exits after validation, kill returns ESRCH.
+        let _ = unsafe { kill(identity.pid as i32, SIGTERM) };
         let _ = fs::remove_file(&pid_path);
         return Ok(());
     }
@@ -56,13 +69,18 @@ pub fn open(_config: &Config) -> WlResult<()> {
             ))
         })?;
 
-    write_private_file(&pid_path, child.id().to_string().as_bytes())?;
+    let identity = process_identity(child.id())
+        .ok_or_else(|| WlError::Config("failed to read quickshell process identity".to_owned()))?;
+    write_pid_record(&pid_path, identity)?;
 
     // Reap asynchronously when the shell exits naturally so the launcher does
     // not leave a zombie. We deliberately do not wait here: `open` is a quick
     // toggle command for Waybar.
     std::thread::spawn(move || {
         let _ = child.wait();
+        if read_pid_record(&pid_path).is_some_and(|current| current == identity) {
+            let _ = fs::remove_file(&pid_path);
+        }
     });
 
     Ok(())
@@ -97,19 +115,70 @@ fn write_private_file(path: &Path, content: &[u8]) -> WlResult<()> {
     Ok(())
 }
 
-fn read_live_pid(path: &Path) -> Option<u32> {
+fn write_pid_record(path: &Path, identity: ProcessIdentity) -> WlResult<()> {
+    write_private_file(
+        path,
+        format!("{} {}\n", identity.pid, identity.start_time_ticks).as_bytes(),
+    )
+}
+
+fn read_pid_record(path: &Path) -> Option<ProcessIdentity> {
     let text = fs::read_to_string(path).ok()?;
-    let pid = text.trim().parse::<u32>().ok()?;
-    if pid == 0 {
+    let mut parts = text.split_whitespace();
+    let pid = parts.next()?.parse::<u32>().ok()?;
+    let start_time_ticks = parts.next()?.parse::<u64>().ok()?;
+    Some(ProcessIdentity {
+        pid,
+        start_time_ticks,
+    })
+}
+
+fn read_live_frontend(path: &Path, runtime_dir: &Path) -> Option<ProcessIdentity> {
+    let identity = read_pid_record(path)?;
+    if identity.pid == 0 {
         return None;
     }
-    let proc = PathBuf::from("/proc").join(pid.to_string());
-    if proc.exists() {
-        Some(pid)
+    let live = process_identity(identity.pid)?;
+    if live == identity && cmdline_matches_quickshell(identity.pid, runtime_dir) {
+        Some(identity)
     } else {
         let _ = fs::remove_file(path);
         None
     }
+}
+
+fn process_identity(pid: u32) -> Option<ProcessIdentity> {
+    let stat =
+        fs::read_to_string(PathBuf::from("/proc").join(pid.to_string()).join("stat")).ok()?;
+    let after_comm = stat.rsplit_once(") ")?.1;
+    let start_time_ticks = after_comm.split_whitespace().nth(19)?.parse::<u64>().ok()?;
+    Some(ProcessIdentity {
+        pid,
+        start_time_ticks,
+    })
+}
+
+fn cmdline_matches_quickshell(pid: u32, runtime_dir: &Path) -> bool {
+    let bytes =
+        fs::read(PathBuf::from("/proc").join(pid.to_string()).join("cmdline")).unwrap_or_default();
+    let args: Vec<String> = bytes
+        .split(|b| *b == 0)
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| std::str::from_utf8(part).ok().map(ToOwned::to_owned))
+        .collect();
+    if args.is_empty() {
+        return false;
+    }
+    let exe_is_quickshell = args
+        .first()
+        .and_then(|arg| Path::new(arg).file_name())
+        .is_some_and(|name| name == "quickshell");
+    let qml_path = runtime_dir.join(QML_FILE).display().to_string();
+    exe_is_quickshell
+        && args
+            .windows(2)
+            .any(|pair| pair == ["--path", qml_path.as_str()])
+        && args.iter().any(|arg| arg == "--no-duplicate")
 }
 
 /// Quickshell frontend.
@@ -173,9 +242,44 @@ ShellRoot {
     actionProc.exec([backend, "action"].concat(args))
   }
 
+  function statusText() {
+    if (busy) return "working…"
+    if (state.connectivity === "connected") return "live"
+    if (state.connectivity === "auth-denied") return "auth denied"
+    if (state.stale) return "stale"
+    return "daemon down"
+  }
+
+  function canMutate() {
+    return state.connectivity === "connected" && state.role !== "none" && !busy
+  }
+
+  function canStart(vm) {
+    return canMutate() && vm.state !== "running"
+  }
+
+  function canStop(vm) {
+    return canMutate() && vm.state === "running"
+  }
+
+  function canAdvanced(vm) {
+    return canMutate() && vm.state === "running"
+  }
+
+  function canUsb(vm, u) {
+    return canMutate() && (!u.ownerVm || u.ownerVm === vm.name)
+  }
+
   function usbLabel(u) {
+    if (u.ownerVm && !u.bound) return "USB " + u.busId
+    if (u.ownerVm) return "owned " + u.ownerVm
     if (u.busId === "pending") return u.bound ? "detach USB" : "attach USB"
     return (u.bound ? "detach " : "attach ") + u.busId
+  }
+
+  function usbTooltip(vm, u) {
+    if (u.ownerVm && u.ownerVm !== vm.name) return "USB " + u.busId + " is owned by " + u.ownerVm
+    return (u.bound ? "Detach USB " : "Attach USB ") + u.busId
   }
 
   Process {
@@ -305,7 +409,7 @@ ShellRoot {
             Text {
               color: "#bac2de"
               font.pixelSize: 12
-              text: root.hoverHint.length > 0 ? root.hoverHint : (root.busy ? "working…" : (root.state.connectivity === "connected" ? "live" : "daemon down"))
+              text: root.hoverHint.length > 0 ? root.hoverHint : root.statusText()
             }
           }
 
@@ -382,7 +486,7 @@ ShellRoot {
                         text: vm.state === "running" ? "stop" : "play_arrow"
                         tooltip: (vm.state === "running" ? "Stop " : "Start ") + vm.name
                         accent: vm.state === "running" ? "#f38ba8" : "#a6e3a1"
-                        enabled: true
+                        enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
                         prominent: true
                         onClicked: root.action([vm.state === "running" ? "stop" : "start", vm.name])
                       }
@@ -390,7 +494,7 @@ ShellRoot {
                         text: expanded ? "expand_less" : "more_horiz"
                         tooltip: expanded ? "Hide controls" : "More controls"
                         accent: "#89b4fa"
-                        enabled: true
+                        enabled: root.state.connectivity === "connected"
                         onClicked: expanded = !expanded
                       }
                     }
@@ -406,9 +510,9 @@ ShellRoot {
                       ControlChip {
                         icon: modelData.bound ? "usb_off" : "usb"
                         label: root.usbLabel(modelData)
-                        tooltip: (modelData.bound ? "Detach USB " : "Attach USB ") + modelData.busId
+                        tooltip: root.usbTooltip(vm, modelData)
                         accent: "#94e2d5"
-                        enabled: root.state.role !== "none"
+                        enabled: root.canUsb(vm, modelData)
                         onClicked: root.action([modelData.bound ? "usb-detach" : "usb-attach", vm.name, modelData.busId])
                       }
                     }
@@ -432,10 +536,10 @@ ShellRoot {
                       font.pixelSize: 11
                       text: (vm.readiness && vm.readiness.length > 0) ? ("ready: " + vm.readiness.join(", ")) : "readiness not reported"
                     }
-                    ControlChip { icon: "terminal"; label: "terminal"; tooltip: "Open terminal"; accent: "#cba6f7"; enabled: vm.state === "running" && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
-                    ControlChip { icon: "restart_alt"; label: "restart"; tooltip: "Restart VM"; accent: "#fab387"; enabled: true; onClicked: root.action(["restart", vm.name]) }
-                    ControlChip { icon: "verified"; label: "verify"; tooltip: "Verify store"; accent: "#f9e2af"; enabled: true; onClicked: root.action(["store-verify", vm.name]) }
-                    ControlChip { icon: "sync_alt"; label: "switch"; tooltip: "Switch VM generation"; accent: "#89b4fa"; enabled: true; onClicked: root.action(["switch", vm.name]) }
+                    ControlChip { icon: "terminal"; label: "terminal"; tooltip: root.state.role === "admin" ? "Open terminal" : "Requires admin role"; accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
+                    ControlChip { icon: "restart_alt"; label: "restart"; tooltip: "Restart VM"; accent: "#fab387"; enabled: root.canAdvanced(vm); onClicked: root.action(["restart", vm.name]) }
+                    ControlChip { icon: "verified"; label: "verify"; tooltip: "Verify store"; accent: "#f9e2af"; enabled: root.canMutate(); onClicked: root.action(["store-verify", vm.name]) }
+                    ControlChip { icon: "sync_alt"; label: "switch"; tooltip: "Switch VM generation"; accent: "#89b4fa"; enabled: root.canAdvanced(vm); onClicked: root.action(["switch", vm.name]) }
                   }
                 }
 
