@@ -8,11 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "GTK4/libadwaita control center for nixling-wlcontrol."
 
-# NOTE: the GTK4 / libadwaita dependencies are intentionally NOT added in
-# Wave 0/1 so the workspace builds without GTK system libraries. The Wave 2
-# GTK agent adds `gtk4` + `libadwaita` here (the flake devShell already
-# provides the system closure) and implements the real control center.
-
 [dependencies]
+gtk = { package = "gtk4", version = "0.9" }
+adw = { package = "libadwaita", version = "0.7", features = ["v1_2"] }
 wlcontrol-core.workspace = true
 wlcontrol-nixling.workspace = true

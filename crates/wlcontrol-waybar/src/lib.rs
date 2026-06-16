@@ -9,8 +9,18 @@
 //! Waybar custom-module contract (`return-type = "json"`): one newline-
 //! terminated JSON object per update with `text`, `class`, and `tooltip`.
 
-use serde::Serialize;
-use wlcontrol_core::model::{Connectivity, RuntimeState, WlState};
+use serde::{Deserialize, Serialize};
+use wlcontrol_core::model::{AuthRole, Connectivity, RuntimeState, Vm, WlState};
+
+const DETAIL_VM_LIMIT: usize = 5;
+
+/// Text density for the Waybar module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisplayMode {
+    Compact,
+    Detail,
+}
 
 /// A single Waybar JSON line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -35,77 +45,187 @@ impl WaybarLine {
 
 /// Render the compact Waybar line for a reduced state.
 pub fn render(state: &WlState) -> WaybarLine {
+    render_mode(state, DisplayMode::Compact)
+}
+
+/// Render the Waybar line for the requested display mode.
+pub fn render_mode(state: &WlState, mode: DisplayMode) -> WaybarLine {
     match state.connectivity {
         Connectivity::DaemonDown => WaybarLine {
             text: "◆ down".to_owned(),
-            class: vec!["daemon-down".to_owned()],
-            tooltip: "nixlingd is unreachable".to_owned(),
+            class: state_classes(state),
+            tooltip: render_tooltip(state),
         },
         Connectivity::AuthDenied => WaybarLine {
             text: "◆ auth".to_owned(),
-            class: vec!["auth-denied".to_owned()],
-            tooltip: "Not authorized on the nixling public socket".to_owned(),
+            class: state_classes(state),
+            tooltip: render_tooltip(state),
         },
-        Connectivity::Connected => render_connected(state),
+        Connectivity::Connected => render_connected(state, mode),
     }
 }
 
-fn render_connected(state: &WlState) -> WaybarLine {
+fn render_connected(state: &WlState, mode: DisplayMode) -> WaybarLine {
     let running = state.running_count();
     let total = state.visible_count();
     let attention = state.needs_attention();
 
+    let mut text = compact_text(running, total, attention);
+    if mode == DisplayMode::Detail {
+        text = detail_text(state, &text);
+    }
+
+    WaybarLine {
+        text,
+        class: state_classes(state),
+        tooltip: render_tooltip(state),
+    }
+}
+
+fn compact_text(running: usize, total: usize, attention: bool) -> String {
     let mut text = format!("◆ {running}/{total}");
     if attention {
         text.push_str(" !");
     }
+    text
+}
 
-    let mut class = vec![match (running, total) {
-        (0, _) => "all-stopped".to_owned(),
-        (r, t) if r == t => "all-running".to_owned(),
-        _ => "partial-running".to_owned(),
-    }];
-    if attention {
+fn detail_text(state: &WlState, prefix: &str) -> String {
+    let visible = visible_vms(state).collect::<Vec<_>>();
+    if visible.is_empty() {
+        return prefix.to_owned();
+    }
+
+    let mut parts = visible
+        .iter()
+        .take(DETAIL_VM_LIMIT)
+        .map(|vm| format!("{}:{}", vm.name, state_glyph(vm.state)))
+        .collect::<Vec<_>>();
+    if visible.len() > DETAIL_VM_LIMIT {
+        parts.push(format!("+{}", visible.len() - DETAIL_VM_LIMIT));
+    }
+
+    format!("{prefix} · {}", parts.join(" "))
+}
+
+fn state_classes(state: &WlState) -> Vec<String> {
+    let mut class = match state.connectivity {
+        Connectivity::DaemonDown => vec!["daemon-down".to_owned()],
+        Connectivity::AuthDenied => vec!["auth-denied".to_owned()],
+        Connectivity::Connected => {
+            let running = state.running_count();
+            let total = state.visible_count();
+            vec![match (running, total) {
+                (0, _) => "all-stopped".to_owned(),
+                (r, t) if r == t => "all-running".to_owned(),
+                _ => "partial-running".to_owned(),
+            }]
+        }
+    };
+    if state.needs_attention() {
         class.push("attention".to_owned());
     }
     if state.stale {
         class.push("stale".to_owned());
     }
-
-    WaybarLine {
-        text,
-        class,
-        tooltip: render_tooltip(state),
-    }
+    class
 }
 
 fn render_tooltip(state: &WlState) -> String {
-    let mut lines = Vec::new();
-    for vm in state.vms.iter().filter(|v| !v.is_net_vm) {
-        let glyph = match vm.state {
-            RuntimeState::Running => "●",
-            RuntimeState::Starting | RuntimeState::Stopping => "◐",
-            RuntimeState::Stopped => "○",
-            RuntimeState::Unknown => "?",
-        };
-        let env = vm.env.as_deref().unwrap_or("-");
-        let mut line = format!("{glyph} {} [{env}]", vm.name);
-        if vm.pending_restart {
-            line.push_str(" (pending restart)");
-        }
-        lines.push(line);
+    let mut lines = vec![format!(
+        "role: {} · connectivity: {}",
+        role_label(state.role),
+        connectivity_label(state.connectivity)
+    )];
+    if let Some(note) = &state.note {
+        lines.push(format!("note: {note}"));
     }
-    if lines.is_empty() {
-        "No VMs declared".to_owned()
-    } else {
-        lines.join("\n")
+
+    let mut any = false;
+    for vm in visible_vms(state) {
+        any = true;
+        lines.push(vm_tooltip_line(vm));
+    }
+    if !any {
+        lines.push("No visible VMs".to_owned());
+    }
+
+    lines.join("\n")
+}
+
+fn visible_vms(state: &WlState) -> impl Iterator<Item = &Vm> {
+    state.vms.iter().filter(|v| !v.is_net_vm && !v.hidden)
+}
+
+fn vm_tooltip_line(vm: &Vm) -> String {
+    let env = vm.env.as_deref().unwrap_or("-");
+    let mut line = format!(
+        "{} {} · env={} · state={}",
+        state_glyph(vm.state),
+        vm.name,
+        env,
+        state_label(vm.state)
+    );
+    if vm.pending_restart {
+        line.push_str(" · pending-restart");
+    }
+
+    let usb = vm
+        .usb
+        .iter()
+        .filter(|claim| claim.bound)
+        .map(|claim| {
+            let owner = claim.owner_vm.as_deref().unwrap_or("unknown");
+            format!("{}→{}", claim.bus_id, owner)
+        })
+        .collect::<Vec<_>>();
+    if !usb.is_empty() {
+        line.push_str(" · usb=");
+        line.push_str(&usb.join(","));
+    }
+
+    line
+}
+
+fn state_glyph(state: RuntimeState) -> &'static str {
+    match state {
+        RuntimeState::Running => "●",
+        RuntimeState::Starting | RuntimeState::Stopping => "◐",
+        RuntimeState::Stopped => "○",
+        RuntimeState::Unknown => "?",
+    }
+}
+
+fn state_label(state: RuntimeState) -> &'static str {
+    match state {
+        RuntimeState::Running => "running",
+        RuntimeState::Starting => "starting",
+        RuntimeState::Stopping => "stopping",
+        RuntimeState::Stopped => "stopped",
+        RuntimeState::Unknown => "unknown",
+    }
+}
+
+fn connectivity_label(connectivity: Connectivity) -> &'static str {
+    match connectivity {
+        Connectivity::Connected => "connected",
+        Connectivity::AuthDenied => "auth-denied",
+        Connectivity::DaemonDown => "daemon-down",
+    }
+}
+
+fn role_label(role: AuthRole) -> &'static str {
+    match role {
+        AuthRole::None => "none",
+        AuthRole::Launcher => "launcher",
+        AuthRole::Admin => "admin",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wlcontrol_core::model::{Vm, VmFeatures};
+    use wlcontrol_core::model::{UsbClaim, VmFeatures};
 
     fn vm(name: &str, state: RuntimeState, net: bool) -> Vm {
         Vm {
@@ -122,6 +242,16 @@ mod tests {
         }
     }
 
+    fn usb_claim(bus_id: &str, owner_vm: Option<&str>) -> UsbClaim {
+        UsbClaim {
+            vm: "corp-vm".into(),
+            env: "work".into(),
+            bus_id: bus_id.into(),
+            bound: true,
+            owner_vm: owner_vm.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn daemon_down_line() {
         let state = WlState {
@@ -131,6 +261,7 @@ mod tests {
         let line = render(&state);
         assert!(line.class.contains(&"daemon-down".to_owned()));
         assert!(line.to_json_line().ends_with("\n"));
+        assert!(line.tooltip.contains("connectivity: daemon-down"));
     }
 
     #[test]
@@ -149,6 +280,111 @@ mod tests {
         let line = render(&state);
         assert_eq!(line.text, "◆ 1/2");
         assert!(line.class.contains(&"partial-running".to_owned()));
+        assert!(!line.text.contains("sys-work-net"));
+    }
+
+    #[test]
+    fn render_delegates_to_compact_mode() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![vm("a", RuntimeState::Running, false)],
+            stale: false,
+            note: None,
+        };
+        assert_eq!(render(&state), render_mode(&state, DisplayMode::Compact));
+    }
+
+    #[test]
+    fn compact_and_detail_text_are_distinct() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![
+                vm("a", RuntimeState::Running, false),
+                vm("b", RuntimeState::Stopped, false),
+            ],
+            stale: false,
+            note: None,
+        };
+
+        let compact = render_mode(&state, DisplayMode::Compact);
+        let detail = render_mode(&state, DisplayMode::Detail);
+
+        assert_eq!(compact.text, "◆ 1/2");
+        assert_eq!(detail.text, "◆ 1/2 · a:● b:○");
+    }
+
+    #[test]
+    fn detail_mode_caps_visible_vm_count() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Launcher,
+            vms: (0..7)
+                .map(|n| vm(&format!("vm{n}"), RuntimeState::Stopped, false))
+                .collect(),
+            stale: false,
+            note: None,
+        };
+
+        let detail = render_mode(&state, DisplayMode::Detail);
+
+        assert_eq!(detail.text, "◆ 0/7 · vm0:○ vm1:○ vm2:○ vm3:○ vm4:○ +2");
+        assert!(!detail.text.contains("vm5:"));
+    }
+
+    #[test]
+    fn classes_include_attention_and_stale() {
+        let mut target = vm("a", RuntimeState::Running, false);
+        target.pending_restart = true;
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![target],
+            stale: true,
+            note: None,
+        };
+
+        let line = render(&state);
+
+        assert!(line.class.contains(&"all-running".to_owned()));
+        assert!(line.class.contains(&"attention".to_owned()));
+        assert!(line.class.contains(&"stale".to_owned()));
+        assert_eq!(line.text, "◆ 1/1 !");
+    }
+
+    #[test]
+    fn tooltip_includes_role_vm_state_pending_restart_and_usb_owner() {
+        let mut target = vm("corp-vm", RuntimeState::Unknown, false);
+        target.pending_restart = true;
+        target.usb.push(usb_claim("1-2", Some("corp-vm")));
+        let mut hidden = vm("hidden-vm", RuntimeState::Running, false);
+        hidden.hidden = true;
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![
+                target,
+                hidden,
+                vm("sys-work-net", RuntimeState::Running, true),
+            ],
+            stale: false,
+            note: Some("cached after refresh failure".to_owned()),
+        };
+
+        let line = render(&state);
+
+        assert!(line
+            .tooltip
+            .contains("role: admin · connectivity: connected"));
+        assert!(line.tooltip.contains("note: cached after refresh failure"));
+        assert!(line
+            .tooltip
+            .contains("? corp-vm · env=work · state=unknown"));
+        assert!(line.tooltip.contains("pending-restart"));
+        assert!(line.tooltip.contains("usb=1-2→corp-vm"));
+        assert!(!line.tooltip.contains("hidden-vm"));
+        assert!(!line.tooltip.contains("sys-work-net"));
     }
 
     #[test]
