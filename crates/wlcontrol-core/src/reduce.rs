@@ -14,14 +14,30 @@
 //! 4. `auth` (`nixling auth status`) sets the effective role.
 //! 5. Missing/inconsistent inputs reduce to `Unknown`, never false-healthy.
 
-use crate::model::{AuthRole, Connectivity, RuntimeState, Vm, WlState};
+use std::collections::HashSet;
+
+use crate::config::Config;
+use crate::model::{AuthRole, Connectivity, RuntimeState, UsbClaim, Vm, WlState};
 use crate::sources::{InventoryVm, ReduceInput, VmStatus};
 
 /// Reduce a bundle of source fragments into the aggregate [`WlState`].
 pub fn reduce(input: ReduceInput) -> WlState {
-    if input.connectivity != Connectivity::Connected {
+    reduce_with_config(input, &Config::default())
+}
+
+/// Reduce source fragments with user configuration for ordering and visibility.
+pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
+    let ReduceInput {
+        connectivity,
+        auth,
+        inventory,
+        statuses,
+        usb,
+    } = input;
+
+    if connectivity != Connectivity::Connected {
         return WlState {
-            connectivity: input.connectivity,
+            connectivity,
             role: AuthRole::None,
             vms: Vec::new(),
             stale: false,
@@ -29,20 +45,24 @@ pub fn reduce(input: ReduceInput) -> WlState {
         };
     }
 
-    let role = input.auth.map(|a| a.role).unwrap_or(AuthRole::None);
+    let role = auth.map(|a| a.role).unwrap_or(AuthRole::None);
     let connectivity = if role == AuthRole::None {
         Connectivity::AuthDenied
     } else {
         Connectivity::Connected
     };
 
-    let inventory = input.inventory.unwrap_or_default();
-    let usb_claims = input.usb.map(|u| u.claims).unwrap_or_default();
+    let inventory = inventory.unwrap_or_default();
+    let usb_claims = usb.map(|u| u.claims).unwrap_or_default();
+    let hidden_names = config
+        .hidden_vms
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
 
-    let vms = inventory
-        .vms
+    let vms = ordered_inventory(inventory.vms, &config.favorites)
         .into_iter()
-        .map(|inv| build_vm(inv, &input.statuses, &usb_claims))
+        .map(|inv| build_vm(inv, &statuses, &usb_claims, &hidden_names))
         .collect();
 
     WlState {
@@ -54,14 +74,18 @@ pub fn reduce(input: ReduceInput) -> WlState {
     }
 }
 
-fn build_vm(inv: InventoryVm, statuses: &[VmStatus], usb_claims: &[crate::model::UsbClaim]) -> Vm {
+fn build_vm(
+    inv: InventoryVm,
+    statuses: &[VmStatus],
+    usb_claims: &[UsbClaim],
+    hidden_names: &HashSet<&str>,
+) -> Vm {
     let status = statuses.iter().find(|s| s.name == inv.name);
+    let is_net_vm = inv.is_net_vm || is_framework_net_vm_name(&inv.name);
+    let hidden = hidden_names.contains(inv.name.as_str());
+    let coarse = coarse_state(inv.coarse_status.as_deref());
 
-    // Per-VM status is authoritative; fall back to the coarse list status.
-    let state = match status {
-        Some(s) => s.state,
-        None => coarse_state(inv.coarse_status.as_deref()),
-    };
+    let state = reduce_state(coarse, status.map(|s| s.state));
 
     let usb = usb_claims
         .iter()
@@ -73,12 +97,52 @@ fn build_vm(inv: InventoryVm, statuses: &[VmStatus], usb_claims: &[crate::model:
         name: inv.name,
         env: inv.env,
         state,
-        is_net_vm: inv.is_net_vm,
+        is_net_vm,
+        hidden,
         pending_restart: status.map(|s| s.pending_restart).unwrap_or(false),
         features: inv.features,
         static_ip: inv.static_ip,
         readiness: status.map(|s| s.readiness.clone()).unwrap_or_default(),
         usb,
+    }
+}
+
+fn ordered_inventory(vms: Vec<InventoryVm>, favorites: &[String]) -> Vec<InventoryVm> {
+    let mut remaining = vms.into_iter().map(Some).collect::<Vec<_>>();
+    let mut ordered = Vec::with_capacity(remaining.len());
+
+    for favorite in favorites {
+        if let Some((idx, _)) = remaining.iter().enumerate().find(|(_, vm)| {
+            vm.as_ref()
+                .is_some_and(|candidate| candidate.name == favorite.as_str())
+        }) {
+            if let Some(vm) = remaining[idx].take() {
+                ordered.push(vm);
+            }
+        }
+    }
+
+    ordered.extend(remaining.into_iter().flatten());
+    ordered
+}
+
+fn reduce_state(coarse: RuntimeState, status: Option<RuntimeState>) -> RuntimeState {
+    match status {
+        Some(status_state) if state_conflicts(coarse, status_state) => RuntimeState::Unknown,
+        Some(status_state) => status_state,
+        None if coarse == RuntimeState::Running => RuntimeState::Unknown,
+        None => coarse,
+    }
+}
+
+fn state_conflicts(coarse: RuntimeState, status: RuntimeState) -> bool {
+    match coarse {
+        RuntimeState::Running => status == RuntimeState::Stopped,
+        RuntimeState::Stopped => matches!(
+            status,
+            RuntimeState::Running | RuntimeState::Starting | RuntimeState::Stopping
+        ),
+        RuntimeState::Starting | RuntimeState::Stopping | RuntimeState::Unknown => false,
     }
 }
 
@@ -91,10 +155,27 @@ fn coarse_state(s: Option<&str>) -> RuntimeState {
     }
 }
 
+fn is_framework_net_vm_name(name: &str) -> bool {
+    name.strip_prefix("sys-")
+        .and_then(|rest| rest.strip_suffix("-net"))
+        .is_some_and(|env| !env.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sources::{Auth, Inventory, UsbProbe};
+
+    fn inventory_vm(name: &str, coarse_status: Option<&str>) -> InventoryVm {
+        InventoryVm {
+            name: name.into(),
+            env: Some("work".into()),
+            is_net_vm: false,
+            features: Default::default(),
+            static_ip: None,
+            coarse_status: coarse_status.map(String::from),
+        }
+    }
 
     #[test]
     fn daemon_down_yields_empty_state() {
@@ -116,14 +197,7 @@ mod tests {
                 role: AuthRole::Admin,
             }),
             inventory: Some(Inventory {
-                vms: vec![InventoryVm {
-                    name: "corp-vm".into(),
-                    env: Some("work".into()),
-                    is_net_vm: false,
-                    features: Default::default(),
-                    static_ip: None,
-                    coarse_status: Some("stopped".into()),
-                }],
+                vms: vec![inventory_vm("corp-vm", Some("running"))],
             }),
             statuses: vec![VmStatus {
                 name: "corp-vm".into(),
@@ -152,5 +226,103 @@ mod tests {
         };
         let state = reduce(input);
         assert_eq!(state.connectivity, Connectivity::AuthDenied);
+    }
+
+    #[test]
+    fn sys_dash_env_dash_net_name_is_net_vm_fallback() {
+        assert!(is_framework_net_vm_name("sys-work-net"));
+        assert!(!is_framework_net_vm_name("sys-net"));
+        assert!(!is_framework_net_vm_name("sys--net"));
+        assert!(!is_framework_net_vm_name("corp-vm"));
+
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![inventory_vm("sys-work-net", Some("stopped"))],
+            }),
+            ..Default::default()
+        };
+        let state = reduce(input);
+        assert!(state.vms[0].is_net_vm);
+    }
+
+    #[test]
+    fn favorites_reorder_and_hidden_vms_are_marked() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![
+                    inventory_vm("alpha", Some("stopped")),
+                    inventory_vm("bravo", Some("stopped")),
+                    inventory_vm("charlie", Some("stopped")),
+                ],
+            }),
+            ..Default::default()
+        };
+        let config = Config {
+            favorites: vec!["charlie".into(), "missing".into(), "alpha".into()],
+            hidden_vms: vec!["bravo".into()],
+            ..Default::default()
+        };
+
+        let state = reduce_with_config(input, &config);
+
+        assert_eq!(
+            state
+                .vms
+                .iter()
+                .map(|vm| vm.name.as_str())
+                .collect::<Vec<_>>(),
+            ["charlie", "alpha", "bravo"]
+        );
+        assert!(!state.vms[0].hidden);
+        assert!(!state.vms[1].hidden);
+        assert!(state.vms[2].hidden);
+    }
+
+    #[test]
+    fn missing_status_for_running_inventory_becomes_unknown_attention() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![inventory_vm("corp-vm", Some("running"))],
+            }),
+            ..Default::default()
+        };
+        let state = reduce(input);
+        assert_eq!(state.vms[0].state, RuntimeState::Unknown);
+        assert!(state.needs_attention());
+    }
+
+    #[test]
+    fn conflicting_inventory_and_status_becomes_unknown_attention() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![inventory_vm("corp-vm", Some("stopped"))],
+            }),
+            statuses: vec![VmStatus {
+                name: "corp-vm".into(),
+                state: RuntimeState::Running,
+                pending_restart: false,
+                readiness: vec![],
+            }],
+            ..Default::default()
+        };
+        let state = reduce(input);
+        assert_eq!(state.vms[0].state, RuntimeState::Unknown);
+        assert!(state.needs_attention());
     }
 }

@@ -7,12 +7,19 @@
 
 use crate::config::Config;
 use crate::model::{
-    ActionKind, AuthRole, Connectivity, PlannedAction, RuntimeState, SocketIntent, Unavailable, Vm,
-    WlState,
+    ActionAvailability, ActionKind, AuthRole, Connectivity, PlannedAction, RuntimeState,
+    SocketIntent, Unavailable, Vm, WlState,
 };
 
 /// Returns `Some(reason)` when `action` cannot currently be invoked.
 pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable> {
+    if matches!(
+        action,
+        ActionKind::AudioMic { .. } | ActionKind::AudioSpeaker { .. } | ActionKind::AudioOff { .. }
+    ) {
+        return Some(Unavailable::NotYetImplemented);
+    }
+
     // Display-only actions are always available.
     match action {
         ActionKind::OpenControlCenter | ActionKind::CycleDisplay | ActionKind::Refresh => {
@@ -55,6 +62,48 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
     }
 }
 
+/// Return the full per-VM action list the control center can render.
+pub fn vm_actions(state: &WlState, config: &Config, vm: &str) -> Vec<ActionAvailability> {
+    let mut actions = vec![
+        ActionKind::Start { vm: vm.into() },
+        ActionKind::Stop { vm: vm.into() },
+        ActionKind::Restart { vm: vm.into() },
+        ActionKind::Switch { vm: vm.into() },
+        ActionKind::LaunchTerminal { vm: vm.into() },
+        ActionKind::StoreVerify { vm: vm.into() },
+    ];
+
+    if let Some(target) = running_vm(state, vm) {
+        for claim in &target.usb {
+            actions.push(ActionKind::UsbAttach {
+                vm: vm.into(),
+                bus_id: claim.bus_id.clone(),
+            });
+            actions.push(ActionKind::UsbDetach {
+                vm: vm.into(),
+                bus_id: claim.bus_id.clone(),
+            });
+        }
+    }
+
+    actions.extend([
+        ActionKind::AudioMic {
+            vm: vm.into(),
+            on: true,
+        },
+        ActionKind::AudioSpeaker {
+            vm: vm.into(),
+            on: true,
+        },
+        ActionKind::AudioOff { vm: vm.into() },
+    ]);
+
+    actions
+        .into_iter()
+        .map(|action| availability(action, state, config))
+        .collect()
+}
+
 /// Plan a concrete dispatch for an action, or return why it is blocked.
 pub fn plan(
     action: &ActionKind,
@@ -62,6 +111,9 @@ pub fn plan(
     config: &Config,
 ) -> Result<PlannedAction, Unavailable> {
     if let Some(reason) = block_reason(action, state) {
+        return Err(reason);
+    }
+    if let Some(reason) = config_block_reason(action, config) {
         return Err(reason);
     }
 
@@ -81,6 +133,9 @@ pub fn plan(
         ActionKind::StoreVerify { vm } => socket(SocketIntent::StoreVerify { vm: vm.clone() }),
         ActionKind::Refresh => socket(SocketIntent::List),
         ActionKind::LaunchTerminal { vm } => terminal_argv(vm, config),
+        ActionKind::AudioMic { .. }
+        | ActionKind::AudioSpeaker { .. }
+        | ActionKind::AudioOff { .. } => return Err(Unavailable::NotYetImplemented),
         ActionKind::OpenControlCenter | ActionKind::CycleDisplay => {
             // These are handled in-process by the UI/Waybar layers, not as a
             // nixling dispatch; planning them is a no-op socket refresh.
@@ -90,6 +145,23 @@ pub fn plan(
         }
     };
     Ok(dispatch)
+}
+
+fn availability(action: ActionKind, state: &WlState, config: &Config) -> ActionAvailability {
+    let unavailable = block_reason(&action, state).or_else(|| config_block_reason(&action, config));
+    ActionAvailability {
+        action,
+        unavailable,
+    }
+}
+
+fn config_block_reason(action: &ActionKind, config: &Config) -> Option<Unavailable> {
+    if matches!(action, ActionKind::LaunchTerminal { .. }) {
+        return config.validate().err().map(|err| Unavailable::Blocked {
+            detail: err.to_string(),
+        });
+    }
+    None
 }
 
 fn required_role(action: &ActionKind) -> AuthRole {
@@ -183,7 +255,7 @@ fn terminal_argv(vm: &str, config: &Config) -> PlannedAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::VmFeatures;
+    use crate::model::UsbClaim;
 
     fn connected_state(role: AuthRole, vms: Vec<Vm>) -> WlState {
         WlState {
@@ -198,14 +270,8 @@ mod tests {
     fn vm(name: &str, state: RuntimeState) -> Vm {
         Vm {
             name: name.into(),
-            env: None,
             state,
-            is_net_vm: false,
-            pending_restart: false,
-            features: VmFeatures::default(),
-            static_ip: None,
-            readiness: vec![],
-            usb: vec![],
+            ..Default::default()
         }
     }
 
@@ -279,5 +345,98 @@ mod tests {
             &state,
         );
         assert!(matches!(reason, Some(Unavailable::VmState { .. })));
+    }
+
+    #[test]
+    fn audio_actions_are_not_yet_implemented_even_when_daemon_is_down() {
+        let state = WlState {
+            connectivity: Connectivity::DaemonDown,
+            ..Default::default()
+        };
+        let actions = [
+            ActionKind::AudioMic {
+                vm: "corp-vm".into(),
+                on: true,
+            },
+            ActionKind::AudioSpeaker {
+                vm: "corp-vm".into(),
+                on: true,
+            },
+            ActionKind::AudioOff {
+                vm: "corp-vm".into(),
+            },
+        ];
+
+        for action in actions {
+            assert!(matches!(
+                block_reason(&action, &state),
+                Some(Unavailable::NotYetImplemented)
+            ));
+            assert!(matches!(
+                plan(&action, &state, &Config::default()),
+                Err(Unavailable::NotYetImplemented)
+            ));
+        }
+    }
+
+    #[test]
+    fn vm_actions_returns_lifecycle_usb_terminal_store_and_audio() {
+        let mut target = vm("corp-vm", RuntimeState::Running);
+        target.usb.push(UsbClaim {
+            vm: "corp-vm".into(),
+            env: "work".into(),
+            bus_id: "1-2".into(),
+            bound: false,
+            owner_vm: None,
+        });
+        let state = connected_state(AuthRole::Admin, vec![target]);
+
+        let actions = vm_actions(&state, &Config::default(), "corp-vm");
+
+        assert_eq!(actions.len(), 11);
+        assert!(matches!(&actions[0].action, ActionKind::Start { .. }));
+        assert!(matches!(&actions[6].action, ActionKind::UsbAttach { .. }));
+        assert!(matches!(&actions[7].action, ActionKind::UsbDetach { .. }));
+        assert!(matches!(&actions[8].action, ActionKind::AudioMic { .. }));
+        assert!(matches!(
+            actions[8].unavailable.as_ref(),
+            Some(Unavailable::NotYetImplemented)
+        ));
+        assert!(matches!(
+            &actions[9].action,
+            ActionKind::AudioSpeaker { .. }
+        ));
+        assert!(matches!(
+            actions[9].unavailable.as_ref(),
+            Some(Unavailable::NotYetImplemented)
+        ));
+        assert!(matches!(&actions[10].action, ActionKind::AudioOff { .. }));
+        assert!(matches!(
+            actions[10].unavailable.as_ref(),
+            Some(Unavailable::NotYetImplemented)
+        ));
+    }
+
+    #[test]
+    fn vm_actions_blocks_terminal_when_config_is_invalid() {
+        let state = connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
+        let config = Config {
+            terminal: crate::config::TerminalConfig {
+                argv: vec![],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let actions = vm_actions(&state, &config, "corp-vm");
+
+        let terminal = actions
+            .iter()
+            .find(|entry| matches!(&entry.action, ActionKind::LaunchTerminal { .. }))
+            .expect("terminal action");
+        assert!(matches!(
+            &terminal.unavailable,
+            Some(Unavailable::Blocked { detail }) if detail.contains("terminal.argv")
+        ));
     }
 }

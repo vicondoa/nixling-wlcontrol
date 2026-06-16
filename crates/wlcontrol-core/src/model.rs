@@ -84,7 +84,7 @@ pub struct VmFeatures {
 }
 
 /// A normalized VM as presented to the UI surfaces.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Vm {
     /// VM name as declared in `nixling.vms.<name>`.
@@ -97,6 +97,9 @@ pub struct Vm {
     /// True for framework-declared net VMs (`sys-*-net`); hidden by default.
     #[serde(default)]
     pub is_net_vm: bool,
+    /// True when user config hides this VM from compact surfaces.
+    #[serde(default)]
+    pub hidden: bool,
     /// True when the running closure differs from the declared closure.
     #[serde(default)]
     pub pending_restart: bool,
@@ -136,8 +139,8 @@ pub struct WlState {
     pub connectivity: Connectivity,
     /// Effective operator role.
     pub role: AuthRole,
-    /// All known VMs (including net VMs and hidden ones); filtering for the
-    /// compact Waybar text is applied by the renderer, not here.
+    /// All known VMs (including net VMs and hidden ones); renderers use
+    /// `is_net_vm` / `hidden` to choose compact vs. detail surfaces.
     pub vms: Vec<Vm>,
     /// True when this state was served from cache after a failed refresh.
     #[serde(default)]
@@ -152,13 +155,16 @@ impl WlState {
     pub fn running_count(&self) -> usize {
         self.vms
             .iter()
-            .filter(|v| !v.is_net_vm && v.state == RuntimeState::Running)
+            .filter(|v| !v.is_net_vm && !v.hidden && v.state == RuntimeState::Running)
             .count()
     }
 
-    /// Count of visible (non-net) VMs.
+    /// Count of visible (non-net, non-hidden) VMs.
     pub fn visible_count(&self) -> usize {
-        self.vms.iter().filter(|v| !v.is_net_vm).count()
+        self.vms
+            .iter()
+            .filter(|v| !v.is_net_vm && !v.hidden)
+            .count()
     }
 
     /// True when any visible VM needs operator attention (pending restart or
@@ -169,7 +175,7 @@ impl WlState {
         }
         self.vms
             .iter()
-            .filter(|v| !v.is_net_vm)
+            .filter(|v| !v.is_net_vm && !v.hidden)
             .any(|v| v.pending_restart || v.state == RuntimeState::Unknown)
     }
 }
@@ -197,6 +203,12 @@ pub enum ActionKind {
     StoreVerify { vm: String },
     /// Launch a host terminal running an interactive guest shell.
     LaunchTerminal { vm: String },
+    /// Toggle microphone forwarding for a VM (disabled until nixling supports it).
+    AudioMic { vm: String, on: bool },
+    /// Toggle speaker forwarding for a VM (disabled until nixling supports it).
+    AudioSpeaker { vm: String, on: bool },
+    /// Disable all audio forwarding for a VM (disabled until nixling supports it).
+    AudioOff { vm: String },
     /// Open / focus the GTK control center.
     OpenControlCenter,
     /// Cycle the Waybar compact/detail display mode.
@@ -298,6 +310,7 @@ mod tests {
                     env: Some("work".into()),
                     state: RuntimeState::Running,
                     is_net_vm: false,
+                    hidden: false,
                     pending_restart: false,
                     features: VmFeatures::default(),
                     static_ip: None,
@@ -309,6 +322,7 @@ mod tests {
                     env: Some("work".into()),
                     state: RuntimeState::Running,
                     is_net_vm: true,
+                    hidden: false,
                     pending_restart: false,
                     features: VmFeatures::default(),
                     static_ip: None,
@@ -335,6 +349,7 @@ mod tests {
             env: None,
             state: RuntimeState::Running,
             is_net_vm: false,
+            hidden: false,
             pending_restart: true,
             features: VmFeatures::default(),
             static_ip: None,
@@ -345,10 +360,75 @@ mod tests {
     }
 
     #[test]
+    fn counts_and_attention_exclude_hidden_vms() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![Vm {
+                name: "noisy-vm".into(),
+                env: None,
+                state: RuntimeState::Unknown,
+                is_net_vm: false,
+                hidden: true,
+                pending_restart: true,
+                features: VmFeatures::default(),
+                static_ip: None,
+                readiness: vec![],
+                usb: vec![],
+            }],
+            stale: false,
+            note: None,
+        };
+        assert_eq!(state.running_count(), 0);
+        assert_eq!(state.visible_count(), 0);
+        assert!(!state.needs_attention());
+    }
+
+    #[test]
     fn wlstate_round_trips_through_json() {
-        let state = WlState::default();
+        let mut state = WlState::default();
+        state.vms.push(Vm {
+            name: "corp-vm".into(),
+            hidden: true,
+            ..Default::default()
+        });
         let json = serde_json::to_string(&state).expect("serialize");
         let back: WlState = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(state, back);
+    }
+
+    #[test]
+    fn vm_hidden_defaults_when_absent_from_json() {
+        let vm: Vm = serde_json::from_str(
+            r#"{
+                "name": "corp-vm",
+                "state": "running"
+            }"#,
+        )
+        .expect("deserialize vm");
+        assert!(!vm.hidden);
+    }
+
+    #[test]
+    fn audio_action_variants_round_trip_through_json() {
+        let actions = [
+            ActionKind::AudioMic {
+                vm: "corp-vm".into(),
+                on: true,
+            },
+            ActionKind::AudioSpeaker {
+                vm: "corp-vm".into(),
+                on: false,
+            },
+            ActionKind::AudioOff {
+                vm: "corp-vm".into(),
+            },
+        ];
+
+        for action in actions {
+            let json = serde_json::to_string(&action).expect("serialize action");
+            let back: ActionKind = serde_json::from_str(&json).expect("deserialize action");
+            assert_eq!(action, back);
+        }
     }
 }

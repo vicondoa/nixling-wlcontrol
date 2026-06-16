@@ -113,6 +113,7 @@ mod tests {
             env: Some("work".into()),
             state,
             is_net_vm: net,
+            hidden: false,
             pending_restart: false,
             features: VmFeatures::default(),
             static_ip: None,
