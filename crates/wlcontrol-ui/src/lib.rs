@@ -204,6 +204,7 @@ ShellRoot {
   property bool busy: false
   property string hoverHint: ""
   property string actionMessage: ""
+  property bool actionFailed: false
 
   function visibleVms() {
     const vms = state.vms || []
@@ -236,6 +237,7 @@ ShellRoot {
   }
 
   function reload() {
+    if (!busy && actionMessage === "done") actionMessage = ""
     statusProc.exec([backend, "status-json"])
   }
 
@@ -246,6 +248,7 @@ ShellRoot {
   function action(args) {
     busy = true
     actionMessage = "running " + args.join(" ")
+    actionFailed = false
     actionProc.exec([backend, "action"].concat(args))
   }
 
@@ -354,9 +357,16 @@ ShellRoot {
       onStreamFinished: actionProc.err = this.text.trim()
     }
     onExited: {
-      if (actionProc.err.length > 0) root.actionMessage = actionProc.err
-      else if (actionProc.out.length > 0) root.actionMessage = actionProc.out
-      else root.actionMessage = "done"
+      if (actionProc.err.length > 0) {
+        root.actionFailed = true
+        root.actionMessage = actionProc.err
+      } else if (actionProc.out.length > 0) {
+        root.actionFailed = false
+        root.actionMessage = actionProc.out
+      } else {
+        root.actionFailed = false
+        root.actionMessage = "done"
+      }
       actionProc.out = ""
       actionProc.err = ""
       root.reload()
@@ -462,9 +472,30 @@ ShellRoot {
             }
           }
 
+          Rectangle {
+            visible: root.actionMessage.length > 0 && !root.busy
+            width: parent.width
+            height: visible ? Math.max(26, actionResult.implicitHeight + 10) : 0
+            radius: 10
+            color: root.actionFailed ? "#4a1f2a" : "#1f3f2c"
+            border.color: root.actionFailed ? "#f38ba8" : "#a6e3a1"
+            border.width: 1
+
+            Text {
+              id: actionResult
+              anchors.fill: parent
+              anchors.margins: 6
+              color: root.actionFailed ? "#f38ba8" : "#a6e3a1"
+              font.pixelSize: 11
+              elide: Text.ElideRight
+              verticalAlignment: Text.AlignVCenter
+              text: root.actionMessage
+            }
+          }
+
           Flickable {
             width: parent.width
-            height: parent.height - 84
+            height: parent.height - 84 - ((root.actionMessage.length > 0 && !root.busy) ? 36 : 0)
             contentWidth: width
             contentHeight: list.height
             clip: true
