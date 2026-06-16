@@ -271,8 +271,7 @@ ShellRoot {
   }
 
   function usbLabel(u) {
-    if (u.ownerVm && !u.bound) return "USB " + u.busId
-    if (u.ownerVm) return "owned " + u.ownerVm
+    if (u.ownerVm && u.ownerVm !== u.vm) return "owned " + u.ownerVm
     if (u.busId === "pending") return u.bound ? "detach USB" : "attach USB"
     return (u.bound ? "detach " : "attach ") + u.busId
   }
