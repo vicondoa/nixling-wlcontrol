@@ -82,6 +82,12 @@ pub fn open(config: &Config) -> WlResult<()> {
         .build();
     let config = config.clone();
 
+    // Manage light/dark via libadwaita's style manager (follow the system
+    // preference) rather than the legacy GtkSettings dark-theme property.
+    app.connect_startup(|_| {
+        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+    });
+
     app.connect_activate(move |app| {
         if let Some(window) = app.active_window() {
             window.present();
@@ -133,13 +139,18 @@ fn build_window(app: &adw::Application, config: Config) -> adw::ApplicationWindo
     let refresh_button = gtk::Button::from_icon_name("view-refresh-symbolic");
     refresh_button.set_tooltip_text(Some("Refresh"));
     header.pack_end(&refresh_button);
-    window.set_titlebar(Some(&header));
-
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.set_vexpand(true);
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&content));
-    window.set_content(Some(&toast_overlay));
+
+    // AdwApplicationWindow has no separate titlebar slot: the header bar and
+    // body both live under set_content(), wrapped in an AdwToolbarView so the
+    // header gets proper top-bar styling. `set_titlebar()` aborts here.
+    let toolbar_view = adw::ToolbarView::new();
+    toolbar_view.add_top_bar(&header);
+    toolbar_view.set_content(Some(&toast_overlay));
+    window.set_content(Some(&toolbar_view));
 
     refresh_button.connect_clicked(glib::clone!(
         #[weak]
