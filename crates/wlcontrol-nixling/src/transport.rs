@@ -77,6 +77,8 @@ impl SeqpacketTransport {
         let sent = send(self.fd.as_raw_fd(), &frame, MsgFlags::MSG_DONTWAIT).map_err(|err| {
             if matches!(err, Errno::EAGAIN) {
                 WlError::Timeout(format!("send to nixlingd after {:?}", self.timeout))
+            } else if matches!(err, Errno::EPIPE | Errno::ECONNRESET | Errno::ENOTCONN) {
+                WlError::DaemonDown(format!("nixlingd public socket closed during send: {err}"))
             } else {
                 WlError::Io(errno_to_io(err))
             }
@@ -102,6 +104,11 @@ impl SeqpacketTransport {
                     WlError::Io(errno_to_io(err))
                 }
             })?;
+        if received == 0 {
+            return Err(WlError::DaemonDown(
+                "nixlingd public socket closed during receive".to_owned(),
+            ));
+        }
         let payload = decode_frame(&buffer[..received])?;
         Ok(payload.to_vec())
     }

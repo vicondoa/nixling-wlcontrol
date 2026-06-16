@@ -90,20 +90,36 @@ impl NixlingClient {
 
     /// Fallible refresh variant useful for tests and diagnostics.
     pub fn try_refresh(&self) -> WlResult<ReduceInput> {
-        let transport = self.connect_and_handshake()?;
-        let auth = request_auth_status(&transport)?;
-        let inventory = request_inventory(&transport).ok();
-        let statuses = inventory
+        let auth = self.request(request_auth_status)?;
+        let mut inventory = self.request(request_inventory).ok();
+        let status_snapshots = inventory
             .as_ref()
             .map(|inventory| {
                 inventory
                     .vms
                     .iter()
-                    .filter_map(|vm| request_status(&transport, &vm.name).ok())
+                    .filter_map(|vm| {
+                        self.request(|transport| request_status_snapshot(transport, &vm.name))
+                            .ok()
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let usb = request_usb_probe(&transport).ok();
+        if let Some(inventory) = inventory.as_mut() {
+            for vm in &mut inventory.vms {
+                if let Some(snapshot) = status_snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.status.name == vm.name)
+                {
+                    vm.static_ip = snapshot.static_ip.clone();
+                }
+            }
+        }
+        let statuses = status_snapshots
+            .into_iter()
+            .map(|snapshot| snapshot.status)
+            .collect();
+        let usb = self.request(request_usb_probe).ok();
 
         Ok(ReduceInput {
             connectivity: Connectivity::Connected,
@@ -190,7 +206,13 @@ impl NixlingClient {
         }
     }
 
+    fn request<T>(&self, request: impl FnOnce(&SeqpacketTransport) -> WlResult<T>) -> WlResult<T> {
+        let transport = self.connect_and_handshake()?;
+        request(&transport)
+    }
+
     fn connect_and_handshake(&self) -> WlResult<SeqpacketTransport> {
+        reject_privileged_broker_socket(&self.socket_path)?;
         let transport = SeqpacketTransport::connect(Path::new(&self.socket_path), self.timeout)?;
         transport.send_payload(&hello_frame()?)?;
         parse_hello_reply(&transport.recv_payload()?)?;
@@ -200,7 +222,8 @@ impl NixlingClient {
 
 fn request_auth_status(transport: &SeqpacketTransport) -> WlResult<Auth> {
     let value = request_value(transport, frame_empty("authStatus")?)?;
-    let payload = response_payload(value, "authStatusResponse", "auth status", Some("auth"))?;
+    let payload = response_payload(value, "authStatusResponse", "auth status", None)?;
+    let payload = payload.get("auth").unwrap_or(&payload);
     Ok(Auth {
         role: map_auth_role(payload.get("role").and_then(Value::as_str)),
     })
@@ -224,6 +247,10 @@ fn request_inventory(transport: &SeqpacketTransport) -> WlResult<Inventory> {
 }
 
 fn request_status(transport: &SeqpacketTransport, vm: &str) -> WlResult<VmStatus> {
+    Ok(request_status_snapshot(transport, vm)?.status)
+}
+
+fn request_status_snapshot(transport: &SeqpacketTransport, vm: &str) -> WlResult<StatusSnapshot> {
     let value = request_value(
         transport,
         frame(
@@ -235,7 +262,7 @@ fn request_status(transport: &SeqpacketTransport, vm: &str) -> WlResult<VmStatus
         )?,
     )?;
     let payload = response_payload(value, "statusResponse", "status", Some("status"))?;
-    status_from_payload(&payload, vm).ok_or_else(|| {
+    status_snapshot_from_payload(&payload, vm).ok_or_else(|| {
         WlError::Protocol(format!(
             "status response did not contain an entry for VM '{vm}'"
         ))
@@ -244,6 +271,15 @@ fn request_status(transport: &SeqpacketTransport, vm: &str) -> WlResult<VmStatus
 
 fn request_usb_probe(transport: &SeqpacketTransport) -> WlResult<UsbProbe> {
     let value = request_value(transport, frame_empty("usbipProbe")?)?;
+    if value.get("type").and_then(Value::as_str) == Some("mutatingVerbResponse") {
+        let response: MutatingVerbResponse = serde_json::from_value(response_payload(
+            value,
+            "mutatingVerbResponse",
+            "mutating verb",
+            None,
+        )?)?;
+        return Err(mutating_response_error(response));
+    }
     let payload = response_payload(value, "usbipProbeResponse", "usb probe", None)?;
     let claims = payload
         .get("entries")
@@ -264,29 +300,42 @@ fn dispatch_mutating(
     let value = request_value(transport, frame(request_type, fields)?)?;
     let payload = response_payload(value, "mutatingVerbResponse", "mutating verb", None)?;
     let response: MutatingVerbResponse = serde_json::from_value(payload)?;
+    mutating_response_result(response)
+}
+
+fn mutating_response_result(response: MutatingVerbResponse) -> WlResult<DispatchOutcome> {
     match response.outcome.as_str() {
-        "applied" | "dry-run-planned" => Ok(DispatchOutcome {
+        "applied" => Ok(DispatchOutcome {
             summary: response
                 .summary
                 .unwrap_or_else(|| format!("{} {}", response.verb, response.outcome)),
         }),
-        "api-ready-timeout" => {
-            Err(WlError::Timeout(response.summary.unwrap_or_else(|| {
-                format!("{} timed out waiting for api-ready", response.verb)
-            })))
-        }
+        "api-ready-timeout" => Err(WlError::Timeout(response.failure_message())),
         "invalid-request" => Err(WlError::Protocol(response.failure_message())),
-        "not-yet-implemented" | "broker-error" => Err(WlError::Nixling(response.failure_message())),
+        "dry-run-planned" | "not-yet-implemented" | "broker-error" => {
+            Err(WlError::Nixling(response.failure_message()))
+        }
         other => Err(WlError::Protocol(format!(
             "unknown mutating verb outcome '{other}'"
         ))),
     }
 }
 
+fn mutating_response_error(response: MutatingVerbResponse) -> WlError {
+    match mutating_response_result(response) {
+        Ok(outcome) => WlError::Protocol(format!(
+            "unexpected applied mutating response to usbipProbe: {}",
+            outcome.summary
+        )),
+        Err(error) => error,
+    }
+}
+
 fn request_value(transport: &SeqpacketTransport, payload: Vec<u8>) -> WlResult<Value> {
     transport.send_payload(&payload)?;
     let response = transport.recv_payload()?;
-    let value: Value = serde_json::from_slice(&response)?;
+    let value: Value = serde_json::from_slice(&response)
+        .map_err(|err| WlError::Protocol(format!("invalid JSON from nixlingd: {err}")))?;
     reject_error_response(&value)?;
     Ok(value)
 }
@@ -324,7 +373,8 @@ fn json_values<const N: usize>(fields: [(&str, Value); N]) -> Map<String, Value>
 }
 
 fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
-    let value: Value = serde_json::from_slice(bytes)?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| WlError::Protocol(format!("invalid hello JSON from nixlingd: {err}")))?;
     reject_error_response(&value)?;
     let type_name = value.get("type").and_then(Value::as_str);
     if type_name == Some("helloRejected") {
@@ -357,20 +407,74 @@ fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
         .get("selectedVersion")
         .and_then(Value::as_str)
         .ok_or_else(|| WlError::Protocol("helloOk missing selectedVersion".to_owned()))?;
-    if selected_version_supported(selected) {
+    selected_version_supported(selected).map_err(|reason| {
+        WlError::Protocol(format!(
+            "nixlingd selected unsupported protocol version {selected}: {reason}"
+        ))
+    })
+}
+
+fn selected_version_supported(version: &str) -> Result<(), String> {
+    let version = parse_stable_semver(version)?;
+    if ((0, 4, 0)..(0, 5, 0)).contains(&version) {
         Ok(())
     } else {
-        Err(WlError::Protocol(format!(
-            "nixlingd selected unsupported protocol version {selected}"
-        )))
+        Err("outside client range >=0.4.0, <0.5.0".to_owned())
     }
 }
 
-fn selected_version_supported(version: &str) -> bool {
-    let mut parts = version.split('.');
-    let major = parts.next().and_then(|part| part.parse::<u64>().ok());
-    let minor = parts.next().and_then(|part| part.parse::<u64>().ok());
-    matches!((major, minor), (Some(0), Some(4)))
+fn parse_stable_semver(version: &str) -> Result<(u64, u64, u64), String> {
+    let (core, build) = version.split_once('+').unwrap_or((version, ""));
+    if let Some(build) = version.split_once('+').map(|(_, build)| build) {
+        validate_semver_identifiers(build, "build metadata")?;
+    }
+    if core.contains('-') {
+        return Err("pre-release versions are not accepted".to_owned());
+    }
+    let mut parts = core.split('.');
+    let major = parse_numeric_identifier(parts.next(), "major")?;
+    let minor = parse_numeric_identifier(parts.next(), "minor")?;
+    let patch = parse_numeric_identifier(parts.next(), "patch")?;
+    if parts.next().is_some() {
+        return Err("expected exactly major.minor.patch".to_owned());
+    }
+    if build.is_empty() && version.contains('+') {
+        return Err("build metadata must not be empty".to_owned());
+    }
+    Ok((major, minor, patch))
+}
+
+fn parse_numeric_identifier(part: Option<&str>, name: &str) -> Result<u64, String> {
+    let part = part.ok_or_else(|| format!("missing {name} version component"))?;
+    if part.is_empty() {
+        return Err(format!("{name} version component is empty"));
+    }
+    if part.len() > 1 && part.starts_with('0') {
+        return Err(format!("{name} version component has a leading zero"));
+    }
+    if !part.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("{name} version component is not numeric"));
+    }
+    part.parse::<u64>()
+        .map_err(|err| format!("{name} version component is invalid: {err}"))
+}
+
+fn validate_semver_identifiers(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{label} must not be empty"));
+    }
+    for identifier in value.split('.') {
+        if identifier.is_empty() {
+            return Err(format!("{label} contains an empty identifier"));
+        }
+        if !identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(format!("{label} contains an invalid identifier"));
+        }
+    }
+    Ok(())
 }
 
 fn response_payload(
@@ -433,53 +537,48 @@ fn parse_daemon_error(value: &Value) -> Option<DaemonError> {
     serde_json::from_value(value.clone()).ok()
 }
 
+fn reject_privileged_broker_socket(socket_path: &str) -> WlResult<()> {
+    let trimmed = socket_path.trim_end_matches('/');
+    let is_canonical_broker = trimmed == "/run/nixling/priv.sock";
+    let has_broker_filename = Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("priv.sock");
+    if is_canonical_broker || has_broker_filename {
+        return Err(WlError::Config(format!(
+            "refusing to connect wlcontrol to privileged nixling broker socket {socket_path}; configure the public socket instead"
+        )));
+    }
+    Ok(())
+}
+
 fn inventory_vm_from_value(value: &Value) -> Option<InventoryVm> {
     let name = string_field(value, &["name", "vm"])?;
-    let feature_obj = value.get("features");
     Some(InventoryVm {
         name,
         env: string_field(value, &["env"]),
         is_net_vm: bool_field(value, &["isNetVm", "is_net_vm"]).unwrap_or(false),
-        features: wlcontrol_core::model::VmFeatures {
-            graphics: bool_field(value, &["graphics"])
-                .or_else(|| feature_obj.and_then(|v| bool_field(v, &["graphics"])))
-                .unwrap_or(false),
-            tpm: bool_field(value, &["tpm"])
-                .or_else(|| feature_obj.and_then(|v| bool_field(v, &["tpm"])))
-                .unwrap_or(false),
-            usbip: bool_field(value, &["usbip", "usbipYubikey"])
-                .or_else(|| feature_obj.and_then(|v| bool_field(v, &["usbip"])))
-                .unwrap_or(false),
-            audio: bool_field(value, &["audio"])
-                .or_else(|| feature_obj.and_then(|v| bool_field(v, &["audio"])))
-                .unwrap_or(false),
-        },
-        static_ip: string_field(value, &["staticIp", "static_ip"]),
-        coarse_status: string_field(value, &["status"])
-            .or_else(|| nested_string_field(value, &["lifecycle"], &["state"]))
+        features: wlcontrol_core::model::VmFeatures::default(),
+        static_ip: None,
+        coarse_status: nested_string_field(value, &["lifecycle"], &["state"])
             .or_else(|| runtime_text(value.get("runtime"))),
     })
 }
 
-fn status_from_payload(payload: &Value, requested_vm: &str) -> Option<VmStatus> {
-    let candidate = if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
-        entries
-            .iter()
-            .find(|entry| string_field(entry, &["name", "vm"]).as_deref() == Some(requested_vm))
-            .or_else(|| entries.first())?
-    } else if let Some(vm) = payload.get("vm").filter(|vm| vm.is_object()) {
-        vm
-    } else {
-        payload
-    };
+#[derive(Debug, Clone)]
+struct StatusSnapshot {
+    status: VmStatus,
+    static_ip: Option<String>,
+}
+
+fn status_snapshot_from_payload(payload: &Value, requested_vm: &str) -> Option<StatusSnapshot> {
+    let candidate = status_candidate(payload, requested_vm)?;
 
     let name = string_field(candidate, &["name", "vm"]).unwrap_or_else(|| requested_vm.to_owned());
-    let pending_restart = bool_field(candidate, &["pendingRestart", "pending_restart"])
-        .or_else(|| {
-            candidate
-                .get("lifecycle")
-                .and_then(|lifecycle| bool_field(lifecycle, &["pendingRestart"]))
-        })
+    let pending_restart = candidate
+        .get("lifecycle")
+        .and_then(|lifecycle| bool_field(lifecycle, &["pendingRestart"]))
+        .or_else(|| bool_field(candidate, &["pendingRestart", "pending_restart"]))
         .unwrap_or(false);
     let readiness = candidate
         .get("readiness")
@@ -493,13 +592,30 @@ fn status_from_payload(payload: &Value, requested_vm: &str) -> Option<VmStatus> 
         })
         .unwrap_or_default();
     let state = state_from_status(candidate);
+    let static_ip = string_field(candidate, &["staticIp", "static_ip"]);
 
-    Some(VmStatus {
-        name,
-        state,
-        pending_restart,
-        readiness,
+    Some(StatusSnapshot {
+        status: VmStatus {
+            name,
+            state,
+            pending_restart,
+            readiness,
+        },
+        static_ip,
     })
+}
+
+fn status_candidate<'a>(payload: &'a Value, requested_vm: &str) -> Option<&'a Value> {
+    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
+        entries
+            .iter()
+            .find(|entry| string_field(entry, &["name", "vm"]).as_deref() == Some(requested_vm))
+            .or_else(|| entries.first())
+    } else if let Some(vm) = payload.get("vm").filter(|vm| vm.is_object()) {
+        Some(vm)
+    } else {
+        Some(payload)
+    }
 }
 
 fn state_from_status(value: &Value) -> RuntimeState {
@@ -526,11 +642,9 @@ fn state_from_status(value: &Value) -> RuntimeState {
 
 fn lifecycle_state(state: &str) -> RuntimeState {
     match state {
-        "Running" | "running" => RuntimeState::Running,
-        "Starting" | "starting" | "Booted" | "booted" | "Restarting" | "restarting" => {
-            RuntimeState::Starting
-        }
-        "Stopping" | "stopping" => RuntimeState::Stopping,
+        "Booted" | "booted" | "Running" | "running" => RuntimeState::Running,
+        "Starting" | "starting" => RuntimeState::Starting,
+        "Restarting" | "restarting" | "Stopping" | "stopping" => RuntimeState::Stopping,
         "Stopped" | "stopped" => RuntimeState::Stopped,
         _ => RuntimeState::Unknown,
     }
@@ -697,6 +811,8 @@ struct MutatingVerbResponse {
     summary: Option<String>,
     #[serde(default)]
     remediation: Option<String>,
+    #[serde(default)]
+    api_ready: Option<String>,
 }
 
 impl MutatingVerbResponse {
@@ -714,6 +830,10 @@ impl MutatingVerbResponse {
         if let Some(remediation) = &self.remediation {
             message.push_str("; ");
             message.push_str(remediation);
+        }
+        if let Some(api_ready) = &self.api_ready {
+            message.push_str("; api-ready=");
+            message.push_str(api_ready);
         }
         message
     }
@@ -759,8 +879,19 @@ mod tests {
 
     #[test]
     fn selected_version_range_matches_nixling_v04() {
-        assert!(selected_version_supported("0.4.0"));
-        assert!(selected_version_supported("0.4.9"));
-        assert!(!selected_version_supported("0.5.0"));
+        assert!(selected_version_supported("0.4.0").is_ok());
+        assert!(selected_version_supported("0.4.9").is_ok());
+        assert!(selected_version_supported("0.4.0+build.1").is_ok());
+        assert!(selected_version_supported("0.4").is_err());
+        assert!(selected_version_supported("0.4.0-alpha").is_err());
+        assert!(selected_version_supported("0.5.0").is_err());
+        assert!(selected_version_supported("0.04.0").is_err());
+    }
+
+    #[test]
+    fn broker_socket_guard_rejects_priv_sock_paths() {
+        assert!(reject_privileged_broker_socket("/run/nixling/priv.sock").is_err());
+        assert!(reject_privileged_broker_socket("/custom/priv.sock").is_err());
+        assert!(reject_privileged_broker_socket("/run/nixling/public.sock").is_ok());
     }
 }
