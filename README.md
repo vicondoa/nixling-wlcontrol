@@ -53,7 +53,10 @@ cargo test --workspace
 
 ## Waybar setup
 
-Print a starter module config and CSS:
+The Waybar module and its click bindings invoke the `nixling-wlcontrol`
+binary by name, so **install the package** (so it is on your `PATH`)
+rather than relying on `nix run` for the bar. Then print a starter
+module config and CSS:
 
 ```bash
 nixling-wlcontrol print-waybar-config   # add to your Waybar "modules" + a "modules-*" array

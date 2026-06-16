@@ -18,6 +18,7 @@ nixling-wlcontrol print-waybar-config
   "exec": "nixling-wlcontrol waybar",
   "return-type": "json",
   "restart-interval": 5,
+  "signal": 8,
   "on-click": "nixling-wlcontrol open",
   "on-click-right": "nixling-wlcontrol action cycle-display",
   "on-click-middle": "nixling-wlcontrol action refresh",
@@ -25,8 +26,14 @@ nixling-wlcontrol print-waybar-config
 }
 ```
 
+The `"signal": 8` key pairs with the module's `SIGRTMIN+8` handler so
+`nixling-wlcontrol action cycle-display` (and any other instance) can
+refresh the bar on demand.
+
 Add `"custom/nixling-wlcontrol"` to one of your `modules-left` /
-`modules-center` / `modules-right` arrays.
+`modules-center` / `modules-right` arrays. The `exec` / `on-click`
+commands assume `nixling-wlcontrol` is installed and on your `PATH`
+(see [Install](../README.md#install)).
 
 ## Output contract
 
