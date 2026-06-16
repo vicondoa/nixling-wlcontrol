@@ -6,9 +6,10 @@
 //! single-instance `open`, and the full action surface.
 
 use std::env;
-use std::fs;
-use std::io::Write as _;
+use std::fs::{self, DirBuilder, OpenOptions};
+use std::io::{Read as _, Write as _};
 use std::os::raw::c_int;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +33,7 @@ const WAYBAR_SLEEP_GRANULARITY: Duration = Duration::from_millis(100);
 const STATE_APP_DIR: &str = "nixling-wlcontrol";
 const DISPLAY_MODE_FILE: &str = "display-mode";
 const WAYBAR_PID_FILE: &str = "waybar.pid";
+const O_NOFOLLOW_FLAG: i32 = 0o400000;
 
 static WAYBAR_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -150,7 +152,7 @@ fn run(cli: Cli) -> wlcontrol_core::WlResult<ExitCode> {
 /// Build the current reduced state from one refresh cycle.
 fn current_state(config: &Config) -> WlState {
     let client = NixlingClient::new(config);
-    reduce::reduce(client.refresh())
+    reduce::reduce_with_config(client.refresh(), config)
 }
 
 fn run_status_json(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
@@ -176,7 +178,9 @@ fn run_waybar(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
         if stdout.write_all(line.to_json_line().as_bytes()).is_err() {
             break;
         }
-        let _ = stdout.flush();
+        if stdout.flush().is_err() {
+            break;
+        }
 
         let sleep_for = if state.connectivity == Connectivity::DaemonDown {
             let sleep_for = daemon_down_backoff(interval, daemon_down_cycles);
@@ -305,9 +309,14 @@ fn waybar_config_output() -> String {
 
 fn cycle_display_mode() -> wlcontrol_core::WlResult<DisplayMode> {
     let path = display_mode_path()?;
-    let next = toggle_display_mode(read_display_mode_at(&path));
-    write_display_mode_at(&path, next)?;
+    let next = cycle_display_mode_at(&path)?;
     signal_waybar_from_pidfile();
+    Ok(next)
+}
+
+fn cycle_display_mode_at(path: &Path) -> wlcontrol_core::WlResult<DisplayMode> {
+    let next = toggle_display_mode(read_display_mode_at(path));
+    write_display_mode_at(path, next)?;
     Ok(next)
 }
 
@@ -320,17 +329,13 @@ fn read_display_mode_from_default_path() -> DisplayMode {
 }
 
 fn read_display_mode_at(path: &Path) -> DisplayMode {
-    fs::read_to_string(path)
+    read_state_file_at(path)
         .map(|contents| parse_display_mode(&contents))
         .unwrap_or(DisplayMode::Compact)
 }
 
 fn write_display_mode_at(path: &Path, mode: DisplayMode) -> wlcontrol_core::WlResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, format!("{}\n", display_mode_name(mode)))?;
-    Ok(())
+    write_state_file_at(path, &format!("{}\n", display_mode_name(mode)))
 }
 
 fn parse_display_mode(contents: &str) -> DisplayMode {
@@ -367,6 +372,38 @@ fn waybar_pid_path() -> wlcontrol_core::WlResult<PathBuf> {
     Ok(state_app_dir()?.join(WAYBAR_PID_FILE))
 }
 
+fn read_state_file_at(path: &Path) -> std::io::Result<String> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW_FLAG)
+        .open(path)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
+}
+
+fn write_state_file_at(path: &Path, contents: &str) -> wlcontrol_core::WlResult<()> {
+    if let Some(parent) = path.parent() {
+        ensure_private_state_dir(parent)?;
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(O_NOFOLLOW_FLAG)
+        .open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(contents.as_bytes())?;
+    Ok(())
+}
+
+fn ensure_private_state_dir(path: &Path) -> wlcontrol_core::WlResult<()> {
+    DirBuilder::new().recursive(true).mode(0o700).create(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
 fn state_app_dir() -> wlcontrol_core::WlResult<PathBuf> {
     Ok(state_root()?.join(STATE_APP_DIR))
 }
@@ -391,25 +428,24 @@ fn non_empty_env_path(name: &str) -> Option<PathBuf> {
 
 struct WaybarPidFile {
     path: PathBuf,
-    pid_text: String,
+    record: WaybarPidRecord,
 }
 
 impl WaybarPidFile {
     fn write() -> Option<Self> {
         let path = waybar_pid_path().ok()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).ok()?;
-        }
-        let pid_text = std::process::id().to_string();
-        fs::write(&path, format!("{pid_text}\n")).ok()?;
-        Some(Self { path, pid_text })
+        let record = WaybarPidRecord::current()?;
+        write_state_file_at(&path, &record.serialize()).ok()?;
+        Some(Self { path, record })
     }
 }
 
 impl Drop for WaybarPidFile {
     fn drop(&mut self) {
-        if fs::read_to_string(&self.path)
-            .map(|contents| contents.trim() == self.pid_text)
+        if read_state_file_at(&self.path)
+            .ok()
+            .and_then(|contents| WaybarPidRecord::parse(&contents))
+            .map(|record| record == self.record)
             .unwrap_or(false)
         {
             let _ = fs::remove_file(&self.path);
@@ -417,27 +453,54 @@ impl Drop for WaybarPidFile {
     }
 }
 
-fn signal_waybar_from_pidfile() {
-    let Some(path) = waybar_pid_path().ok() else {
-        return;
-    };
-    let Some(pid) = fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| contents.trim().parse::<u32>().ok())
-    else {
-        return;
-    };
-    if process_matches_waybar(pid) {
-        let Ok(pid) = c_int::try_from(pid) else {
-            return;
-        };
-        unsafe {
-            kill(pid, waybar_refresh_signal_number());
-        };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WaybarPidRecord {
+    pid: u32,
+    start_time: u64,
+}
+
+impl WaybarPidRecord {
+    fn current() -> Option<Self> {
+        let pid = std::process::id();
+        let start_time = process_start_time(pid)?;
+        Some(Self { pid, start_time })
+    }
+
+    fn parse(contents: &str) -> Option<Self> {
+        let mut fields = contents.split_whitespace();
+        let pid = fields.next()?.parse().ok()?;
+        let start_time = fields.next()?.parse().ok()?;
+        if fields.next().is_some() {
+            return None;
+        }
+        Some(Self { pid, start_time })
+    }
+
+    fn serialize(self) -> String {
+        format!("{} {}\n", self.pid, self.start_time)
     }
 }
 
-fn process_matches_waybar(pid: u32) -> bool {
+fn process_start_time(pid: u32) -> Option<u64> {
+    let stat = Path::new("/proc").join(pid.to_string()).join("stat");
+    fs::read_to_string(stat)
+        .ok()
+        .and_then(|contents| parse_proc_start_time(&contents))
+}
+
+fn parse_proc_start_time(stat: &str) -> Option<u64> {
+    let (_comm, rest) = stat.rsplit_once(") ")?;
+    rest.split_whitespace().nth(19)?.parse().ok()
+}
+
+fn process_matches_waybar(record: WaybarPidRecord) -> bool {
+    process_start_time(record.pid)
+        .map(|start_time| start_time == record.start_time)
+        .unwrap_or(false)
+        && process_cmdline_matches_waybar(record.pid)
+}
+
+fn process_cmdline_matches_waybar(pid: u32) -> bool {
     let cmdline = Path::new("/proc").join(pid.to_string()).join("cmdline");
     fs::read(cmdline)
         .map(|bytes| cmdline_matches_waybar(&bytes))
@@ -452,8 +515,31 @@ fn cmdline_matches_waybar(bytes: &[u8]) -> bool {
     let Some(program) = args.first() else {
         return false;
     };
-    let program = String::from_utf8_lossy(program);
-    program.ends_with("nixling-wlcontrol") && args.iter().any(|arg| *arg == b"waybar")
+    program_basename_matches(program) && args.get(1) == Some(&b"waybar".as_slice())
+}
+
+fn program_basename_matches(program: &[u8]) -> bool {
+    program.rsplit(|b| *b == b'/').next() == Some(b"nixling-wlcontrol".as_slice())
+}
+
+fn signal_waybar_from_pidfile() {
+    let Some(path) = waybar_pid_path().ok() else {
+        return;
+    };
+    let Some(record) = read_state_file_at(&path)
+        .ok()
+        .and_then(|contents| WaybarPidRecord::parse(&contents))
+    else {
+        return;
+    };
+    if process_matches_waybar(record) {
+        let Ok(pid) = c_int::try_from(record.pid) else {
+            return;
+        };
+        unsafe {
+            kill(pid, waybar_refresh_signal_number());
+        };
+    }
 }
 
 fn describe_unavailable(reason: &Unavailable) -> String {
@@ -479,6 +565,26 @@ fn auth_role_name(role: wlcontrol_core::model::AuthRole) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_state_file(name: &str) -> PathBuf {
+        let root = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is before Unix epoch")
+            .as_nanos();
+        root.join("wlcontrol-cli-tests")
+            .join(format!("{name}-{}-{now}", std::process::id()))
+            .join("state-file")
+    }
+
+    fn cleanup_state_file(path: &Path) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
 
     #[test]
     fn parses_display_mode_file_contents() {
@@ -499,6 +605,59 @@ mod tests {
             DisplayMode::Compact
         );
         assert_eq!(display_mode_name(DisplayMode::Detail), "detail");
+    }
+
+    #[test]
+    fn missing_display_mode_file_defaults_to_compact() {
+        let path = test_state_file("missing-display-mode");
+        assert_eq!(read_display_mode_at(&path), DisplayMode::Compact);
+        cleanup_state_file(&path);
+    }
+
+    #[test]
+    fn display_mode_round_trips_with_private_state_permissions() {
+        let path = test_state_file("display-mode-roundtrip");
+        for mode in [DisplayMode::Compact, DisplayMode::Detail] {
+            write_display_mode_at(&path, mode).expect("write display mode");
+            assert_eq!(read_display_mode_at(&path), mode);
+        }
+
+        let parent = path.parent().expect("state file has parent");
+        assert_eq!(
+            fs::metadata(parent)
+                .expect("state dir metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("state file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        cleanup_state_file(&path);
+    }
+
+    #[test]
+    fn cycle_display_mode_at_path_toggles_and_persists() {
+        let path = test_state_file("cycle-display-mode");
+        write_display_mode_at(&path, DisplayMode::Compact).expect("write compact mode");
+
+        assert_eq!(
+            cycle_display_mode_at(&path).expect("cycle compact to detail"),
+            DisplayMode::Detail
+        );
+        assert_eq!(read_display_mode_at(&path), DisplayMode::Detail);
+        assert_eq!(
+            cycle_display_mode_at(&path).expect("cycle detail to compact"),
+            DisplayMode::Compact
+        );
+        assert_eq!(read_display_mode_at(&path), DisplayMode::Compact);
+        cleanup_state_file(&path);
     }
 
     #[test]
@@ -525,6 +684,30 @@ mod tests {
         assert!(!cmdline_matches_waybar(
             b"/nix/store/bin/nixling-wlcontrol\0open\0"
         ));
+        assert!(!cmdline_matches_waybar(
+            b"/nix/store/bin/nixling-wlcontrol\0action\0stop\0waybar\0"
+        ));
+        assert!(!cmdline_matches_waybar(
+            b"/nix/store/bin/not-nixling-wlcontrol\0waybar\0"
+        ));
         assert!(!cmdline_matches_waybar(b"/bin/other\0waybar\0"));
+    }
+
+    #[test]
+    fn pidfile_record_round_trips_pid_and_start_time() {
+        let record = WaybarPidRecord {
+            pid: 42,
+            start_time: 99,
+        };
+        assert_eq!(WaybarPidRecord::parse(&record.serialize()), Some(record));
+        assert_eq!(WaybarPidRecord::parse("42\n"), None);
+        assert_eq!(WaybarPidRecord::parse("42 99 extra\n"), None);
+    }
+
+    #[test]
+    fn parses_proc_stat_start_time_after_process_name() {
+        let stat =
+            "123 (name with ) paren) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 4242 23 24";
+        assert_eq!(parse_proc_start_time(stat), Some(4242));
     }
 }

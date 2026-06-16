@@ -5,8 +5,9 @@
 //! nixling protocol logic remain in their owning crates.
 
 use std::cell::{Cell, RefCell};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::rc::Rc;
+use std::thread;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -63,6 +64,7 @@ const APP_CSS: &str = r#"
 struct WindowState {
     current: Rc<RefCell<Option<WlState>>>,
     show_internal: Rc<Cell<bool>>,
+    action_in_flight: Rc<Cell<bool>>,
 }
 
 /// Open (or focus) the control center window.
@@ -90,7 +92,7 @@ pub fn open(config: &Config) -> WlResult<()> {
         window.present();
     });
 
-    let exit = app.run();
+    let exit = app.run_with_args::<String>(&[]);
     if exit == glib::ExitCode::SUCCESS {
         Ok(())
     } else {
@@ -105,6 +107,7 @@ fn build_window(app: &adw::Application, config: Config) -> adw::ApplicationWindo
     let state = WindowState {
         current: Rc::new(RefCell::new(None)),
         show_internal: Rc::new(Cell::new(false)),
+        action_in_flight: Rc::new(Cell::new(false)),
     };
 
     let window = adw::ApplicationWindow::builder()
@@ -266,7 +269,7 @@ fn refresh_state_async(
             match refresh.await {
                 Ok((config, loaded)) => {
                     *state.current.borrow_mut() = Some(loaded.clone());
-                    refresh_button.set_sensitive(true);
+                    refresh_button.set_sensitive(!state.action_in_flight.get());
                     render_state(
                         &content,
                         &role_label,
@@ -279,7 +282,7 @@ fn refresh_state_async(
                     );
                 }
                 Err(_) => {
-                    refresh_button.set_sensitive(true);
+                    refresh_button.set_sensitive(!state.action_in_flight.get());
                     show_toast(&toast_overlay, "refresh worker stopped unexpectedly");
                 }
             }
@@ -309,7 +312,15 @@ fn render_state(
             toast_overlay,
             window,
         ),
-        Connectivity::AuthDenied => render_auth_denied(content),
+        Connectivity::AuthDenied => render_auth_denied(
+            content,
+            config,
+            state,
+            role_label,
+            refresh_button,
+            toast_overlay,
+            window,
+        ),
         Connectivity::Connected => render_vm_groups(
             content,
             config,
@@ -399,7 +410,15 @@ fn render_daemon_down(
     content.append(&page);
 }
 
-fn render_auth_denied(content: &gtk::Box) {
+fn render_auth_denied(
+    content: &gtk::Box,
+    config: &Config,
+    state: &WindowState,
+    role_label: &gtk::Label,
+    refresh_button: &gtk::Button,
+    toast_overlay: &adw::ToastOverlay,
+    window: &adw::ApplicationWindow,
+) {
     clear_content(content);
     let page = adw::StatusPage::builder()
         .icon_name("dialog-password-symbolic")
@@ -407,6 +426,37 @@ fn render_auth_denied(content: &gtk::Box) {
         .description("nixlingd is reachable, but this user has role none. Join the nixling lifecycle group or run from an authorized session.")
         .vexpand(true)
         .build();
+    let retry = gtk::Button::with_label("Retry");
+    retry.add_css_class("suggested-action");
+    retry.set_halign(gtk::Align::Center);
+    retry.connect_clicked(glib::clone!(
+        #[weak]
+        content,
+        #[weak]
+        role_label,
+        #[weak]
+        refresh_button,
+        #[weak]
+        toast_overlay,
+        #[weak]
+        window,
+        #[strong]
+        config,
+        #[strong]
+        state,
+        move |_| {
+            refresh_state_async(
+                config.clone(),
+                state.clone(),
+                content.clone(),
+                role_label.clone(),
+                refresh_button.clone(),
+                toast_overlay.clone(),
+                window.clone(),
+            );
+        }
+    ));
+    page.set_child(Some(&retry));
     content.append(&page);
 }
 
@@ -618,6 +668,10 @@ fn build_action_button(
                 );
             }
         ));
+        if state.action_in_flight.get() {
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some("Another action is already in progress"));
+        }
     } else if let Some(reason) = availability.unavailable {
         button.set_sensitive(false);
         button.set_tooltip_text(Some(&unavailable_tooltip(&reason)));
@@ -638,6 +692,11 @@ fn handle_action_click(
     toast_overlay: adw::ToastOverlay,
     window: adw::ApplicationWindow,
 ) {
+    if state.action_in_flight.get() {
+        show_toast(&toast_overlay, "another action is already in progress");
+        return;
+    }
+
     let Some(current) = state.current.borrow().clone() else {
         show_toast(&toast_overlay, "state is still loading");
         return;
@@ -805,8 +864,15 @@ fn spawn_process(argv: Vec<String>) -> WlResult<()> {
             "empty terminal argv; check [terminal] config".to_owned(),
         ));
     };
-    Command::new(program).args(args).spawn()?;
+    let child = Command::new(program).args(args).spawn()?;
+    let _reaper = thread::Builder::new()
+        .name("wlcontrol-ui-terminal-reaper".to_owned())
+        .spawn(move || reap_child(child))?;
     Ok(())
+}
+
+fn reap_child(mut child: Child) {
+    let _ = child.wait();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -814,25 +880,31 @@ fn dispatch_socket_async(
     intent: SocketIntent,
     config: Config,
     state: WindowState,
-    button: gtk::Button,
+    _button: gtk::Button,
     content: gtk::Box,
     role_label: gtk::Label,
     refresh_button: gtk::Button,
     toast_overlay: adw::ToastOverlay,
     window: adw::ApplicationWindow,
 ) {
-    button.set_sensitive(false);
+    if state.action_in_flight.replace(true) {
+        show_toast(&toast_overlay, "another action is already in progress");
+        return;
+    }
+
+    refresh_button.set_sensitive(false);
+    set_action_surface_sensitive(&content, false);
     let worker_config = config.clone();
     let dispatch = gio::spawn_blocking(move || {
-        NixlingClient::new(&worker_config)
+        let outcome = NixlingClient::new(&worker_config)
             .dispatch(&intent)
             .map(|outcome| outcome.summary)
-            .map_err(|err| err.to_string())
+            .map_err(|err| err.to_string());
+        let loaded = load_state(&worker_config);
+        (worker_config, outcome, loaded)
     });
 
     glib::MainContext::default().spawn_local(glib::clone!(
-        #[weak]
-        button,
         #[weak]
         content,
         #[weak]
@@ -849,30 +921,61 @@ fn dispatch_socket_async(
         state,
         async move {
             match dispatch.await {
-                Ok(Ok(summary)) => {
-                    button.set_sensitive(true);
-                    show_toast(&toast_overlay, &summary);
-                    refresh_state_async(
-                        config.clone(),
-                        state.clone(),
-                        content.clone(),
-                        role_label.clone(),
-                        refresh_button.clone(),
-                        toast_overlay.clone(),
-                        window.clone(),
+                Ok((config, outcome, loaded)) => {
+                    *state.current.borrow_mut() = Some(loaded.clone());
+                    state.action_in_flight.set(false);
+                    refresh_button.set_sensitive(true);
+                    match outcome {
+                        Ok(summary) => show_toast(&toast_overlay, &summary),
+                        Err(err) => show_toast(&toast_overlay, &err),
+                    }
+                    render_state(
+                        &content,
+                        &role_label,
+                        &refresh_button,
+                        &toast_overlay,
+                        &window,
+                        &config,
+                        &state,
+                        &loaded,
                     );
                 }
-                Ok(Err(err)) => {
-                    button.set_sensitive(true);
-                    show_toast(&toast_overlay, &err);
-                }
                 Err(_) => {
-                    button.set_sensitive(true);
+                    state.action_in_flight.set(false);
+                    refresh_button.set_sensitive(true);
+                    if let Some(current) = state.current.borrow().clone() {
+                        render_state(
+                            &content,
+                            &role_label,
+                            &refresh_button,
+                            &toast_overlay,
+                            &window,
+                            &config,
+                            &state,
+                            &current,
+                        );
+                    }
                     show_toast(&toast_overlay, "action worker stopped unexpectedly");
                 }
             }
         }
     ));
+}
+
+fn set_action_surface_sensitive(content: &gtk::Box, sensitive: bool) {
+    set_descendant_buttons_sensitive(content.upcast_ref(), sensitive);
+}
+
+fn set_descendant_buttons_sensitive(widget: &gtk::Widget, sensitive: bool) {
+    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+        button.set_sensitive(sensitive);
+    }
+
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        child = current.next_sibling();
+        set_descendant_buttons_sensitive(&current, sensitive);
+    }
 }
 
 fn show_toast(toast_overlay: &adw::ToastOverlay, message: &str) {

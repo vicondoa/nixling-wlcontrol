@@ -354,6 +354,31 @@ mod tests {
     }
 
     #[test]
+    fn class_matrix_covers_auth_denied_and_all_stopped() {
+        let auth_denied = WlState {
+            connectivity: Connectivity::AuthDenied,
+            ..Default::default()
+        };
+        let auth_line = render(&auth_denied);
+        assert_eq!(auth_line.text, "◆ auth");
+        assert!(auth_line.class.contains(&"auth-denied".to_owned()));
+
+        let all_stopped = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![
+                vm("a", RuntimeState::Stopped, false),
+                vm("b", RuntimeState::Stopped, false),
+            ],
+            stale: false,
+            note: None,
+        };
+        let stopped_line = render(&all_stopped);
+        assert_eq!(stopped_line.text, "◆ 0/2");
+        assert!(stopped_line.class.contains(&"all-stopped".to_owned()));
+    }
+
+    #[test]
     fn tooltip_includes_role_vm_state_pending_restart_and_usb_owner() {
         let mut target = vm("corp-vm", RuntimeState::Unknown, false);
         target.pending_restart = true;

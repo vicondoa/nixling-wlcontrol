@@ -246,22 +246,46 @@ mod tests {
 
     #[test]
     fn maps_unavailable_to_human_tooltips() {
-        assert_eq!(
-            unavailable_tooltip(&Unavailable::InsufficientRole {
-                required: AuthRole::Admin
-            }),
-            "requires admin"
-        );
-        assert_eq!(
-            unavailable_tooltip(&Unavailable::UsbOwnedElsewhere {
-                owner: "corp-vm".to_owned()
-            }),
-            "USB owned by corp-vm"
-        );
-        assert_eq!(
-            unavailable_tooltip(&Unavailable::NotYetImplemented),
-            "unsupported by the current nixling audio control plane"
-        );
+        let cases = [
+            (Unavailable::DaemonDown, "nixlingd"),
+            (
+                Unavailable::InsufficientRole {
+                    required: AuthRole::Admin,
+                },
+                "admin",
+            ),
+            (
+                Unavailable::VmState {
+                    detail: "start the VM before opening a terminal".to_owned(),
+                },
+                "start the VM",
+            ),
+            (
+                Unavailable::UsbOwnedElsewhere {
+                    owner: "corp-vm".to_owned(),
+                },
+                "corp-vm",
+            ),
+            (Unavailable::NotYetImplemented, "unsupported"),
+            (
+                Unavailable::Blocked {
+                    detail: "terminal.argv must not be empty".to_owned(),
+                },
+                "terminal.argv",
+            ),
+        ];
+
+        for (reason, expected) in cases {
+            let tooltip = unavailable_tooltip(&reason);
+            assert!(
+                !tooltip.trim().is_empty(),
+                "{reason:?} yielded empty tooltip"
+            );
+            assert!(
+                tooltip.contains(expected),
+                "{reason:?} tooltip {tooltip:?} did not contain {expected:?}"
+            );
+        }
     }
 
     #[test]
@@ -281,27 +305,41 @@ mod tests {
 
     #[test]
     fn only_destructive_running_vm_actions_need_confirmation() {
+        let destructive_actions = [
+            ActionKind::Stop {
+                vm: "corp-vm".to_owned(),
+            },
+            ActionKind::Restart {
+                vm: "corp-vm".to_owned(),
+            },
+            ActionKind::Switch {
+                vm: "corp-vm".to_owned(),
+            },
+        ];
         let running = vm("corp-vm", Some("work"), RuntimeState::Running);
-        let stopped = vm("corp-vm", Some("work"), RuntimeState::Stopped);
 
-        assert!(needs_confirmation(
-            &ActionKind::Stop {
-                vm: "corp-vm".to_owned()
-            },
-            &running
-        ));
-        assert!(needs_confirmation(
-            &ActionKind::Switch {
-                vm: "corp-vm".to_owned()
-            },
-            &running
-        ));
-        assert!(!needs_confirmation(
-            &ActionKind::Stop {
-                vm: "corp-vm".to_owned()
-            },
-            &stopped
-        ));
+        for action in &destructive_actions {
+            assert!(
+                needs_confirmation(action, &running),
+                "{action:?} should require confirmation for a running VM"
+            );
+        }
+
+        for state in [
+            RuntimeState::Stopped,
+            RuntimeState::Starting,
+            RuntimeState::Stopping,
+            RuntimeState::Unknown,
+        ] {
+            let target = vm("corp-vm", Some("work"), state);
+            for action in &destructive_actions {
+                assert!(
+                    !needs_confirmation(action, &target),
+                    "{action:?} should not require confirmation for {state:?}"
+                );
+            }
+        }
+
         assert!(!needs_confirmation(
             &ActionKind::Start {
                 vm: "corp-vm".to_owned()
