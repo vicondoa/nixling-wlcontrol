@@ -12,6 +12,23 @@ use crate::error::{WlError, WlResult};
 /// Default config file location: `${XDG_CONFIG_HOME:-~/.config}/nixling-wlcontrol/config.toml`.
 pub const CONFIG_RELATIVE_PATH: &str = "nixling-wlcontrol/config.toml";
 
+const PRIVILEGED_BROKER_SOCKET_MESSAGE: &str =
+    "refusing to use the privileged broker socket; nixling-wlcontrol speaks only the public socket";
+
+/// Returns true when `path` is acceptable as a nixling public-socket path.
+///
+/// This intentionally rejects the privileged broker socket by both its exact
+/// canonical path and by basename so downstream protocol clients can share the
+/// same fail-closed guard before connecting.
+pub fn is_public_socket_path(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty() || path == "/run/nixling/priv.sock" {
+        return false;
+    }
+
+    std::path::Path::new(path).file_name() != Some(std::ffi::OsStr::new("priv.sock"))
+}
+
 /// Top-level configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
@@ -82,6 +99,12 @@ impl Config {
 
     /// Validate a loaded configuration before any command planning uses it.
     pub fn validate(&self) -> WlResult<()> {
+        if self.public_socket.trim().is_empty() {
+            return Err(WlError::Config("public_socket must not be empty".into()));
+        }
+        if !is_public_socket_path(&self.public_socket) {
+            return Err(WlError::Config(PRIVILEGED_BROKER_SOCKET_MESSAGE.into()));
+        }
         if self.terminal.argv.is_empty() {
             return Err(WlError::Config(
                 "terminal.argv must contain at least one argv element".into(),
@@ -156,5 +179,47 @@ argv = []
         )
         .expect_err("empty argv should fail validation");
         assert!(matches!(err, WlError::Config(msg) if msg.contains("terminal.argv")));
+    }
+
+    #[test]
+    fn malformed_toml_is_config_error() {
+        let err = Config::from_toml("<malformed>").expect_err("malformed toml should fail");
+        assert!(matches!(err, WlError::Config(_)));
+    }
+
+    #[test]
+    fn rejects_privileged_broker_socket_paths() {
+        for public_socket in [
+            "/run/nixling/priv.sock",
+            "/run/other/priv.sock",
+            "priv.sock",
+            "  /run/nixling/priv.sock  ",
+        ] {
+            assert!(!is_public_socket_path(public_socket));
+            let err = Config::from_toml(&format!("public_socket = \"{public_socket}\""))
+                .expect_err("privileged broker socket path should fail");
+            assert!(matches!(
+                err,
+                WlError::Config(msg) if msg == PRIVILEGED_BROKER_SOCKET_MESSAGE
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_empty_public_socket() {
+        let err =
+            Config::from_toml("public_socket = \"\"").expect_err("empty public socket should fail");
+        assert!(matches!(
+            err,
+            WlError::Config(msg) if msg.contains("public_socket")
+        ));
+        assert!(!is_public_socket_path(""));
+    }
+
+    #[test]
+    fn accepts_public_socket_path() {
+        assert!(is_public_socket_path("/run/nixling/public.sock"));
+        Config::from_toml("public_socket = \"/run/nixling/public.sock\"")
+            .expect("public socket path should validate");
     }
 }

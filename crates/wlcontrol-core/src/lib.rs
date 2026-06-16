@@ -11,7 +11,7 @@ pub mod plan;
 pub mod reduce;
 pub mod sources;
 
-pub use config::Config;
+pub use config::{is_public_socket_path, Config};
 pub use error::{WlError, WlResult};
 pub use model::{
     ActionAvailability, ActionKind, AuthRole, Connectivity, PlannedAction, RuntimeState,

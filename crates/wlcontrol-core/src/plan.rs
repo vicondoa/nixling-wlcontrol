@@ -275,6 +275,16 @@ mod tests {
         }
     }
 
+    fn usb_claim(vm: &str, bus_id: &str, bound: bool, owner_vm: Option<&str>) -> UsbClaim {
+        UsbClaim {
+            vm: vm.into(),
+            env: "work".into(),
+            bus_id: bus_id.into(),
+            bound,
+            owner_vm: owner_vm.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn daemon_down_blocks_lifecycle() {
         let state = WlState {
@@ -308,6 +318,43 @@ mod tests {
                 required: AuthRole::Admin
             })
         ));
+    }
+
+    #[test]
+    fn role_gating_distinguishes_lifecycle_and_terminal_privileges() {
+        let no_role = connected_state(AuthRole::None, vec![vm("corp-vm", RuntimeState::Stopped)]);
+        let lifecycle = ActionKind::Start {
+            vm: "corp-vm".into(),
+        };
+        assert!(matches!(
+            plan(&lifecycle, &no_role, &Config::default()),
+            Err(Unavailable::InsufficientRole {
+                required: AuthRole::Launcher
+            })
+        ));
+
+        let launcher = connected_state(
+            AuthRole::Launcher,
+            vec![vm("corp-vm", RuntimeState::Stopped)],
+        );
+        assert!(plan(&lifecycle, &launcher, &Config::default()).is_ok());
+
+        let running_launcher = connected_state(
+            AuthRole::Launcher,
+            vec![vm("corp-vm", RuntimeState::Running)],
+        );
+        let terminal = ActionKind::LaunchTerminal {
+            vm: "corp-vm".into(),
+        };
+        assert!(matches!(
+            plan(&terminal, &running_launcher, &Config::default()),
+            Err(Unavailable::InsufficientRole {
+                required: AuthRole::Admin
+            })
+        ));
+
+        let admin = connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
+        assert!(plan(&terminal, &admin, &Config::default()).is_ok());
     }
 
     #[test]
@@ -345,6 +392,96 @@ mod tests {
             &state,
         );
         assert!(matches!(reason, Some(Unavailable::VmState { .. })));
+    }
+
+    #[test]
+    fn running_state_gates_stop_restart_switch_and_terminal() {
+        let stopped_launcher = connected_state(
+            AuthRole::Launcher,
+            vec![vm("corp-vm", RuntimeState::Stopped)],
+        );
+        for action in [
+            ActionKind::Stop {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::Restart {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::Switch {
+                vm: "corp-vm".into(),
+            },
+        ] {
+            assert!(matches!(
+                plan(&action, &stopped_launcher, &Config::default()),
+                Err(Unavailable::VmState { .. })
+            ));
+        }
+
+        let stopped_admin =
+            connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Stopped)]);
+        let terminal = ActionKind::LaunchTerminal {
+            vm: "corp-vm".into(),
+        };
+        assert!(matches!(
+            plan(&terminal, &stopped_admin, &Config::default()),
+            Err(Unavailable::VmState { .. })
+        ));
+
+        let running_launcher = connected_state(
+            AuthRole::Launcher,
+            vec![vm("corp-vm", RuntimeState::Running)],
+        );
+        for action in [
+            ActionKind::Stop {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::Restart {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::Switch {
+                vm: "corp-vm".into(),
+            },
+        ] {
+            assert!(plan(&action, &running_launcher, &Config::default()).is_ok());
+        }
+
+        let running_admin =
+            connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
+        assert!(plan(&terminal, &running_admin, &Config::default()).is_ok());
+    }
+
+    #[test]
+    fn usb_attach_and_detach_respect_foreign_owner() {
+        let mut owner = vm("dev-vm", RuntimeState::Running);
+        owner
+            .usb
+            .push(usb_claim("dev-vm", "1-2", true, Some("dev-vm")));
+        let state = connected_state(
+            AuthRole::Launcher,
+            vec![vm("corp-vm", RuntimeState::Running), owner],
+        );
+
+        for action in [
+            ActionKind::UsbAttach {
+                vm: "corp-vm".into(),
+                bus_id: "1-2".into(),
+            },
+            ActionKind::UsbDetach {
+                vm: "corp-vm".into(),
+                bus_id: "1-2".into(),
+            },
+        ] {
+            assert!(matches!(
+                plan(&action, &state, &Config::default()),
+                Err(Unavailable::UsbOwnedElsewhere { owner }) if owner == "dev-vm"
+            ));
+        }
+
+        let detach_owner = ActionKind::UsbDetach {
+            vm: "dev-vm".into(),
+            bus_id: "1-2".into(),
+        };
+        assert!(plan(&detach_owner, &state, &Config::default()).is_ok());
     }
 
     #[test]
