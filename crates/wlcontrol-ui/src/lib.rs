@@ -810,7 +810,7 @@ ShellRoot {
 
                   Flow {
                     id: usbControls
-                    visible: root.visibleUsbClaims(vm).length > 0 || (root.state.connectivity === "connected" && root.state.role !== "none")
+                    visible: expanded && (root.visibleUsbClaims(vm).length > 0 || (root.state.connectivity === "connected" && root.state.role !== "none"))
                     width: parent.width
                     spacing: 6
                     Repeater {
@@ -843,7 +843,7 @@ ShellRoot {
                   }
 
                   Row {
-                    visible: usbEntryVisible
+                    visible: expanded && usbEntryVisible
                     width: parent.width
                     height: visible ? chooserFlow.implicitHeight : 0
                     spacing: 6
@@ -869,7 +869,7 @@ ShellRoot {
                   }
 
                   Row {
-                    visible: usbEntryVisible
+                    visible: expanded && usbEntryVisible
                     width: parent.width
                     height: visible ? 30 : 0
                     spacing: 6
