@@ -326,20 +326,25 @@ ShellRoot {
     return state.connectivity === "connected" && state.role === "admin" && !busy
   }
 
+  function hasCapability(vm, capability) {
+    const caps = (vm && vm.capabilities) ? vm.capabilities : ({})
+    return caps[capability] !== false
+  }
+
   function canStart(vm) {
-    return canAdminMutate() && vm.state !== "running"
+    return canAdminMutate() && vm.state !== "running" && hasCapability(vm, "start")
   }
 
   function canStop(vm) {
-    return canAdminMutate() && vm.state === "running"
+    return canAdminMutate() && vm.state === "running" && hasCapability(vm, "stop")
   }
 
-  function canAdvanced(vm) {
-    return canAdminMutate() && vm.state === "running"
+  function canAdvanced(vm, capability) {
+    return canAdminMutate() && vm.state === "running" && hasCapability(vm, capability)
   }
 
   function canUsb(vm, u) {
-    return canAdminMutate() && (!u.ownerVm || u.ownerVm === vm.name)
+    return canAdminMutate() && hasCapability(vm, "usbHotplug") && (!u.ownerVm || u.ownerVm === vm.name)
   }
 
   function usbLabel(u) {
@@ -436,7 +441,8 @@ ShellRoot {
     panelTopMargin = clamp(panelTopMargin, 4, Math.max(4, screenHeight() - panel.height - 4))
   }
 
-  function disabledReason(vm, role) {
+  function disabledReason(vm, role, capability) {
+    if (vm && capability && !hasCapability(vm, capability)) return "Unsupported by this VM runtime"
     if (state.connectivity !== "connected") return state.connectivity === "auth-denied" ? "Authorization denied" : "nixlingd is unreachable"
     if (role === "admin" && state.role !== "admin") return "Requires admin role"
     if (state.role === "none") return "Requires launcher role"
@@ -769,7 +775,7 @@ ShellRoot {
                       anchors.verticalCenter: parent.verticalCenter
                       IconButton {
                         text: vm.state === "running" ? "stop" : "play_arrow"
-                        tooltip: enabled ? ((vm.state === "running" ? "Stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin")
+                        tooltip: enabled ? ((vm.state === "running" ? "Stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin", vm.state === "running" ? "stop" : "start")
                         accent: vm.state === "running" ? "#f38ba8" : "#a6e3a1"
                         enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
                         prominent: true
@@ -816,16 +822,16 @@ ShellRoot {
                     id: quickActions
                     width: parent.width
                     spacing: 8
-                    IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin"); accent: "#ffffff"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
+                    IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal"); accent: "#ffffff"; enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
                     Repeater {
                       model: vm.quickLaunch || []
-                      IconButton { text: modelData.icon; tooltip: modelData.tooltip; accent: "#ffffff"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["quick-launch", vm.name, modelData.id]) }
+                      IconButton { text: modelData.icon; tooltip: enabled ? modelData.tooltip : root.disabledReason(vm, "admin", "terminal"); accent: "#ffffff"; enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"; onClicked: root.action(["quick-launch", vm.name, modelData.id]) }
                     }
-                    IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin"); accent: "#6c7086"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
-                    IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(null, "admin"); accent: "#6c7086"; enabled: root.canAdminMutate(); onClicked: root.action(["store-verify", vm.name]) }
-                    IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(null, "launcher"); accent: "#6c7086"; enabled: root.canMutate(); onClicked: root.action(["build", vm.name]) }
-                    IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(null, "admin"); accent: "#6c7086"; enabled: root.canAdminMutate(); onClicked: root.action(["boot", vm.name]) }
-                    IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin"); accent: "#6c7086"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
+                    IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin", "restart"); accent: "#6c7086"; enabled: root.canAdvanced(vm, "restart"); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
+                    IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(vm, "admin", "storeVerify"); accent: "#6c7086"; enabled: root.canAdminMutate() && root.hasCapability(vm, "storeVerify"); onClicked: root.action(["store-verify", vm.name]) }
+                    IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(vm, "launcher", "build"); accent: "#6c7086"; enabled: root.canMutate() && root.hasCapability(vm, "build"); onClicked: root.action(["build", vm.name]) }
+                    IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(vm, "admin", "boot"); accent: "#6c7086"; enabled: root.canAdminMutate() && root.hasCapability(vm, "boot"); onClicked: root.action(["boot", vm.name]) }
+                    IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin", "switch"); accent: "#6c7086"; enabled: root.canAdvanced(vm, "switch"); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
                   }
 
                   Flow {
@@ -838,7 +844,7 @@ ShellRoot {
                       ControlChip {
                         icon: modelData.bound ? "usb_off" : "usb"
                         label: root.usbLabel(modelData)
-                        tooltip: enabled ? root.usbTooltip(vm, modelData) : (modelData.ownerVm && modelData.ownerVm !== vm.name ? root.usbTooltip(vm, modelData) : root.disabledReason(null, "admin"))
+                        tooltip: enabled ? root.usbTooltip(vm, modelData) : (modelData.ownerVm && modelData.ownerVm !== vm.name ? root.usbTooltip(vm, modelData) : root.disabledReason(vm, "admin", "usbHotplug"))
                         accent: "#6c7086"
                         enabled: root.canUsb(vm, modelData)
                         onClicked: root.attachOrPrompt(vmCard, vm, modelData)
@@ -847,9 +853,9 @@ ShellRoot {
                     ControlChip {
                       icon: "add"
                       label: "USB"
-                      tooltip: enabled ? ("Attach another USB device to " + vm.name) : root.disabledReason(null, "admin")
+                      tooltip: enabled ? ("Attach another USB device to " + vm.name) : root.disabledReason(vm, "admin", "usbHotplug")
                       accent: "#6c7086"
-                      enabled: root.canAdminMutate()
+                      enabled: root.canAdminMutate() && root.hasCapability(vm, "usbHotplug")
                       onClicked: root.attachOrPrompt(vmCard, vm, ({ busId: "pending", bound: false, ownerVm: null }))
                     }
                     Rectangle {
@@ -934,7 +940,7 @@ ShellRoot {
                       label: "attach"
                       tooltip: "Attach entered USB bus id"
                       accent: "#6c7086"
-                      enabled: usbEntryText.length > 0 && root.canAdminMutate()
+                      enabled: usbEntryText.length > 0 && root.canAdminMutate() && root.hasCapability(vm, "usbHotplug")
                       onClicked: root.action(["usb-attach", vm.name, usbEntryText])
                     }
                   }
@@ -1070,6 +1076,10 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("x: vmListFlickable.width - width"));
         assert!(QML_SOURCE.contains("model: vm.quickLaunch || []"));
         assert!(QML_SOURCE.contains("[\"quick-launch\", vm.name, modelData.id]"));
+        assert!(QML_SOURCE.contains("function hasCapability(vm, capability)"));
+        assert!(QML_SOURCE.contains("root.hasCapability(vm, \"storeVerify\")"));
+        assert!(QML_SOURCE.contains("root.canAdvanced(vm, \"switch\")"));
+        assert!(QML_SOURCE.contains("root.hasCapability(vm, \"usbHotplug\")"));
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
         assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED"));
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
