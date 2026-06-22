@@ -177,7 +177,8 @@ to rerun long validations themselves — they inspect the plan/diff and
 the supplied evidence, and flag missing validation as a finding. Green
 tests do not waive the gate; a wave closes only on unanimous sign-off.
 
-Panel reviewers run on **GPT-5.5**. Each returns JSON:
+Panel reviewers use the operator-selected review model/tooling for the
+wave. Each returns JSON:
 
 ```json
 {
