@@ -670,7 +670,7 @@ fn client_for_timeout(path: &Path, command_timeout_ms: u64) -> NixlingClient {
 }
 
 fn unique_socket_path() -> PathBuf {
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".s");
+    let base = std::env::temp_dir().join("wlc-ps");
     let id = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
     let dir = base.join(format!("s{}-{id}", process::id()));
     fs::create_dir_all(&dir).expect("socket dir");
