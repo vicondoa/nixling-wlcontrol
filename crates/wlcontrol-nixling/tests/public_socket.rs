@@ -12,7 +12,7 @@ use std::{
 };
 
 use nix::sys::socket::{
-    accept4, bind, listen, recv, send, socket, AddressFamily, Backlog, MsgFlags, SockFlag,
+    accept4, bind, connect, listen, recv, send, socket, AddressFamily, Backlog, MsgFlags, SockFlag,
     SockType, UnixAddr,
 };
 use serde_json::{json, Value};
@@ -299,6 +299,15 @@ fn malformed_frames_degrade_refresh_and_are_protocol_errors_on_dispatch() {
     }
 }
 
+#[test]
+fn malformed_frame_server_tolerates_client_closing_after_hello() {
+    for mode in [FakeMode::LengthMismatchFrame, FakeMode::OversizedFrame] {
+        let server = FakeNixlingd::start(mode);
+        send_hello_then_close(server.path());
+        server.join();
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ExpectedError {
     Nixling,
@@ -346,6 +355,12 @@ enum FakeMode {
     InvalidJson,
     LengthMismatchFrame,
     OversizedFrame,
+}
+
+impl FakeMode {
+    fn malformed_frame_mode(self) -> bool {
+        matches!(self, Self::LengthMismatchFrame | Self::OversizedFrame)
+    }
 }
 
 struct FakeNixlingd {
@@ -427,7 +442,7 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
         return;
     }
 
-    send_json(
+    if let Err(err) = send_json(
         &conn,
         json!({
             "type": "helloOk",
@@ -435,8 +450,12 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
             "selectedVersion": "0.4.0",
             "capabilities": ["typed-errors", "export-broker-audit"]
         }),
-    )
-    .expect("send helloOk");
+    ) {
+        if mode.malformed_frame_mode() && err.kind() == io::ErrorKind::BrokenPipe {
+            return;
+        }
+        panic!("send helloOk: {err}");
+    }
 
     match mode {
         FakeMode::AcceptThenStall => {
@@ -628,6 +647,26 @@ fn recv_json(fd: &OwnedFd) -> io::Result<Value> {
 fn send_json(fd: &OwnedFd, value: Value) -> io::Result<()> {
     let payload = serde_json::to_vec(&value)?;
     send_payload(fd, &payload)
+}
+
+fn send_hello_then_close(path: &Path) {
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .expect("socket");
+    let addr = UnixAddr::new(path).expect("unix addr");
+    connect(fd.as_raw_fd(), &addr).expect("connect");
+    send_json(
+        &fd,
+        json!({
+            "type": "hello",
+            "clientVersion": ">=0.4.0, <0.5.0"
+        }),
+    )
+    .expect("send hello");
 }
 
 fn send_payload(fd: &OwnedFd, payload: &[u8]) -> io::Result<()> {
