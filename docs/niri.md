@@ -24,9 +24,26 @@ hide them.
 
 ## Theme
 
-The popup uses the same Catppuccin-like color language as the shipped
-Waybar CSS: dark base, green running/start, red stop, peach restart or
-attention, teal USB, blue switch, and purple terminal.
+The popup and Waybar styling share nixling's generated color artifacts:
 
-If you replace the generated CSS with your own Waybar colors, keep the
-same semantic mapping so the bar and popup still read as one UI.
+- `/etc/nixling/ui-colors.json` carries version `1`, host and state
+  accents, per-env accents, and per-VM active / inactive / urgent border
+  colors.
+- `/etc/nixling/ui-colors.css` exposes the same palette as CSS variables
+  for Waybar.
+
+The JSON shape is:
+`{ version: 1, host: { accent }, states: { running, transitioning,
+pendingRestart, error, denied, unknown }, envs: { <env>: { accent } },
+vms: { <vm>: { env, border: { active, inactive, urgent } } } }`.
+
+`nixling-wlcontrol open` accepts parsed theme data from the configured
+color artifact through the status JSON or these environment variables:
+`NIXLING_WLCONTROL_THEME_JSON` for the full artifact,
+`NIXLING_WLCONTROL_STATE_COLORS` for the `states` object,
+`NIXLING_WLCONTROL_ENV_COLORS` for env accents, and
+`NIXLING_WLCONTROL_VM_COLORS` for VM border colors. The popup uses state
+colors for VM dots and action feedback, env accents for card stripes, and
+VM border colors when provided. Missing, invalid, or malformed color data
+is ignored and the popup falls back to visible Catppuccin-like defaults
+instead of crashing.

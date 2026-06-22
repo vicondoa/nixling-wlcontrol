@@ -10,3 +10,4 @@ description = "Quickshell layer-shell frontend launcher for nixling-wlcontrol."
 
 [dependencies]
 wlcontrol-core.workspace = true
+serde_json.workspace = true
