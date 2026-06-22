@@ -29,8 +29,8 @@ The popup and Waybar styling share nixling's generated color artifacts:
 - `/etc/nixling/ui-colors.json` carries version `1`, host and state
   accents, per-env accents, and per-VM active / inactive / urgent border
   colors.
-- `/etc/nixling/ui-colors.css` exposes the same palette as CSS variables
-  for Waybar.
+- `/etc/nixling/ui-colors.css` exposes the same palette as GTK
+  `@define-color` names such as `@nixling_state_running` for Waybar.
 
 The JSON shape is:
 `{ version: 1, host: { accent }, states: { running, transitioning,

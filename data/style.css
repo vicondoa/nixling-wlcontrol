@@ -15,28 +15,28 @@
 }
 
 #custom-nixling-wlcontrol.all-stopped {
-  color: var(--nixling-state-unknown, #6c7086);
+  color: @nixling_state_unknown;
   opacity: 0.7;
 }
 
 #custom-nixling-wlcontrol.all-running {
-  color: var(--nixling-state-running, #a6e3a1);
+  color: @nixling_state_running;
 }
 
 #custom-nixling-wlcontrol.partial-running {
-  color: var(--nixling-state-transitioning, #f9e2af);
+  color: @nixling_state_transitioning;
 }
 
 #custom-nixling-wlcontrol.attention {
-  color: var(--nixling-state-pendingRestart, #fab387);
+  color: @nixling_state_pendingRestart;
 }
 
 #custom-nixling-wlcontrol.daemon-down {
-  color: var(--nixling-state-error, #f38ba8);
+  color: @nixling_state_error;
 }
 
 #custom-nixling-wlcontrol.auth-denied {
-  color: var(--nixling-state-denied, #cba6f7);
+  color: @nixling_state_denied;
 }
 
 #custom-nixling-wlcontrol.stale {

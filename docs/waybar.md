@@ -65,23 +65,23 @@ The renderer emits these classes on `#custom-nixling-wlcontrol`:
 | `auth-denied` | Reachable but no authorized role. |
 | `stale` | State served from cache after a failed refresh. |
 
-The starter CSS imports nixling's generated color variables from
-`/etc/nixling/ui-colors.css` and uses the state variables with fallbacks:
+The starter CSS imports nixling's generated GTK color definitions from
+`/etc/nixling/ui-colors.css` and uses the state color names:
 
-| Variable | Used for |
+| GTK color | Used for |
 | --- | --- |
-| `--nixling-state-running` | `all-running` |
-| `--nixling-state-transitioning` | `partial-running` |
-| `--nixling-state-pendingRestart` | `attention` |
-| `--nixling-state-error` | `daemon-down` |
-| `--nixling-state-denied` | `auth-denied` |
-| `--nixling-state-unknown` | `all-stopped` |
+| `@nixling_state_running` | `all-running` |
+| `@nixling_state_transitioning` | `partial-running` |
+| `@nixling_state_pendingRestart` | `attention` |
+| `@nixling_state_error` | `daemon-down` |
+| `@nixling_state_denied` | `auth-denied` |
+| `@nixling_state_unknown` | `all-stopped` |
 
 The CSS artifact is normally generated at `/etc/nixling/ui-colors.css`.
-If the file is absent or malformed, Waybar still loads the starter style
-and uses the fallback colors embedded in each `var(...)` expression. The
-rules only set state accent colors so the module inherits your bar's
-font, padding, and base styling.
+It defines those names with GTK `@define-color`, for example
+`@define-color nixling_state_running #a6e3a1;`. The rules only set state
+accent colors so the module inherits your bar's font, padding, and base
+styling.
 
 ## Clicks
 

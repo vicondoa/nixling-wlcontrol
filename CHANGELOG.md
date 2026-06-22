@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Waybar CSS color references.** Updated the starter stylesheet and docs
+  to consume nixling's generated GTK `@define-color` names
+  (`@nixling_state_*`) instead of legacy CSS custom properties.
+
 ### Added
 
 - **Workspace and contract.** Rust workspace with `wlcontrol-core`
