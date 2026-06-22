@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Force shutdown affordance.** The Quickshell popup keeps force shutdown out
+  of the primary VM button, scaffolds it only inside ellipsis-expanded controls
+  with destructive styling and strong two-click confirmation, and distinguishes
+  graceful Stop messaging from force-stop messaging while the nixling
+  force-stop contract lands.
 - **Quickshell VM card colors.** VM card borders now use environment
   accents instead of compositor-oriented per-VM border colors, keeping
   card identity aligned with the left accent stripe.

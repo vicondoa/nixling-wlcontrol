@@ -19,7 +19,8 @@ silently.
 | Show declared VMs | on | none | `nixling list` | VM set, env, features, order. |
 | Show per-VM runtime | on | none | `nixling status <vm>` | Runtime/readiness/pending-restart truth. |
 | USB probe | on | none | `nixling usb probe` | Read-only claim/ownership view. |
-| Start / Stop / Restart | on | admin | `vm start|stop|restart --apply` | Explicit apply; gated on VM state. |
+| Start / Stop / Restart | on | admin | `vm start|stop|restart --apply` | Explicit apply; Stop is the normal graceful guest-shutdown path when nixling supports it. |
+| Force shutdown | ellipsis-expanded only | admin | pending nixling force-stop socket/CLI contract | Emergency override only; never a primary visible button. Requires destructive styling and a two-click confirmation because it skips graceful guest shutdown. |
 | Store verify | advanced icon | admin | `store verify` | Check live-pool/store integrity. |
 | Build | advanced icon | launcher | `nixling build <vm>` | Build/evaluate the VM toplevel without activating it. |
 | Boot | advanced icon | admin | `boot --apply` | Stage the built/current closure for the next VM boot without switching the running VM. |
@@ -50,6 +51,10 @@ shortcuts.
 
 The control center renders this matrix with auth-aware gating: blocked
 actions are disabled with a tooltip explaining why, VM quick actions are
-icon-only circular controls with hover text, and destructive actions
-(stop/restart/switch on a running VM) prompt for confirmation. Action progress
-and results are shown as human-readable messages rather than raw command lines.
+icon-only circular controls with hover text, and stop/restart/switch on a
+running VM prompt for confirmation. The primary Stop button is the graceful
+guest-shutdown path and its progress copy says so. Force shutdown is kept
+behind the ellipsis-expanded controls, uses destructive styling, requires a
+strong second click, and is disabled until the nixling force-stop contract is
+available. Action progress and results are shown as human-readable messages
+rather than raw command lines.

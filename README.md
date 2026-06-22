@@ -22,10 +22,10 @@ official `nixling` CLI.
   with state-driven CSS classes (`all-running`, `partial-running`,
   `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip.
 - **A Quickshell layer-shell control popup** — per-VM cards with lifecycle
-  controls, detached terminal launch, USB attach/detach, store
-  verify/build/boot/switch icons, config-driven quick-launch icons, and an
-  observability portal button, all gated on your effective nixling
-  authorization.
+  controls, graceful stop as the primary Stop action, detached terminal launch,
+  USB attach/detach, store verify/build/boot/switch icons, config-driven
+  quick-launch icons, and an observability portal button, all gated on your
+  effective nixling authorization.
 - **nixling-native colors** — Waybar CSS consumes nixling's generated
   `/etc/nixling/ui-colors.css` GTK `@define-color` names, while the popup
   consumes `/etc/nixling/ui-colors.json` with visible built-in fallbacks.
