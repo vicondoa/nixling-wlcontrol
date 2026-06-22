@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Quickshell VM card colors.** VM card borders now use environment
+  accents instead of compositor-oriented per-VM border colors, keeping
+  card identity aligned with the left accent stripe.
 - **Waybar CSS color references.** Updated the starter stylesheet and docs
   to consume nixling's generated GTK `@define-color` names
   (`@nixling_state_*`) instead of legacy CSS custom properties.

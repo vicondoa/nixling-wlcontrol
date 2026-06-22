@@ -40,10 +40,10 @@ vms: { <vm>: { env, border: { active, inactive, urgent } } } }`.
 `nixling-wlcontrol open` accepts parsed theme data from the configured
 color artifact through the status JSON or these environment variables:
 `NIXLING_WLCONTROL_THEME_JSON` for the full artifact,
-`NIXLING_WLCONTROL_STATE_COLORS` for the `states` object,
-`NIXLING_WLCONTROL_ENV_COLORS` for env accents, and
-`NIXLING_WLCONTROL_VM_COLORS` for VM border colors. The popup uses state
-colors for VM dots and action feedback, env accents for card stripes, and
-VM border colors when provided. Missing, invalid, or malformed color data
-is ignored and the popup falls back to visible Catppuccin-like defaults
-instead of crashing.
+`NIXLING_WLCONTROL_STATE_COLORS` for the `states` object, and
+`NIXLING_WLCONTROL_ENV_COLORS` for env accents. The popup uses state
+colors for VM dots and action feedback, and env accents for card borders
+and stripes. VM border colors in the artifact remain reserved for the
+compositor/window-border surface. Missing, invalid, or malformed color
+data is ignored and the popup falls back to visible Catppuccin-like
+defaults instead of crashing.

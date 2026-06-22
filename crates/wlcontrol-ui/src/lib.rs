@@ -249,7 +249,6 @@ ShellRoot {
   property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_THEME_JSON"))
   property var stateColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_STATE_COLORS"))
   property var envColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_ENV_COLORS"))
-  property var vmColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_VM_COLORS"))
 
   function visibleVms() {
     const vms = state.vms || []
@@ -316,24 +315,6 @@ ShellRoot {
     const themedAccent = themed && typeof themed === "object" ? themed.accent : themed
     const flattenedAccent = flattened && typeof flattened === "object" ? flattened.accent : flattened
     return colorOr(themedAccent, colorOr(flattenedAccent, hostAccentColor()))
-  }
-
-  function vmBorderTheme(vm) {
-    if (!vm || !vm.name) return ({})
-    const vms = themeSection("vms")
-    const themed = vms[vm.name]
-    const flattened = vmColorsEnv[vm.name]
-    const themedBorder = themed && typeof themed === "object" ? (themed.border || themed) : ({})
-    return themedBorder && Object.keys(themedBorder).length > 0
-      ? themedBorder
-      : (flattened && typeof flattened === "object" ? (flattened.border || flattened) : ({}))
-  }
-
-  function vmBorderColor(vm) {
-    const border = vmBorderTheme(vm)
-    if (vm.pendingRestart || vm.state === "unknown") return colorOr(border.urgent, stateColor("pendingRestart"))
-    if (vm.state === "running") return colorOr(border.active, envAccentColor(vm.env))
-    return colorOr(border.inactive, "#2a2d35")
   }
 
   function vmDotColor(vm) {
@@ -811,7 +792,7 @@ ShellRoot {
                   height: cardContent.implicitHeight + 16
                   radius: 13
                   color: "#16181d"
-                  border.color: root.vmBorderColor(vm)
+                  border.color: root.envAccentColor(vm.env)
                   border.width: 1
                   clip: true
 
@@ -1170,7 +1151,9 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_THEME_JSON"));
         assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_STATE_COLORS"));
         assert!(QML_SOURCE.contains("function stateColor(name)"));
-        assert!(QML_SOURCE.contains("function vmBorderColor(vm)"));
+        assert!(QML_SOURCE.contains("border.color: root.envAccentColor(vm.env)"));
+        assert!(!QML_SOURCE.contains("vmBorderColor"));
+        assert!(!QML_SOURCE.contains("vmBorderTheme"));
         assert!(QML_SOURCE.contains("root.stateColor(\"pendingRestart\")"));
         assert!(!QML_SOURCE.contains("if (e === \"work\")"));
         assert!(!QML_SOURCE.contains("if (e === \"personal\")"));
