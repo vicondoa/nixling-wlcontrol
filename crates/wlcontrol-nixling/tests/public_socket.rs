@@ -301,7 +301,11 @@ fn malformed_frames_degrade_refresh_and_are_protocol_errors_on_dispatch() {
 
 #[test]
 fn malformed_frame_server_tolerates_client_closing_after_hello() {
-    for mode in [FakeMode::LengthMismatchFrame, FakeMode::OversizedFrame] {
+    for mode in [
+        FakeMode::AcceptThenStall,
+        FakeMode::LengthMismatchFrame,
+        FakeMode::OversizedFrame,
+    ] {
         let server = FakeNixlingd::start(mode);
         send_hello_then_close(server.path());
         server.join();
@@ -358,8 +362,11 @@ enum FakeMode {
 }
 
 impl FakeMode {
-    fn malformed_frame_mode(self) -> bool {
-        matches!(self, Self::LengthMismatchFrame | Self::OversizedFrame)
+    fn allows_early_client_close(self) -> bool {
+        matches!(
+            self,
+            Self::AcceptThenStall | Self::LengthMismatchFrame | Self::OversizedFrame
+        )
     }
 }
 
@@ -451,7 +458,7 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
             "capabilities": ["typed-errors", "export-broker-audit"]
         }),
     ) {
-        if mode.malformed_frame_mode() && err.kind() == io::ErrorKind::BrokenPipe {
+        if mode.allows_early_client_close() && err.kind() == io::ErrorKind::BrokenPipe {
             return;
         }
         panic!("send helloOk: {err}");
