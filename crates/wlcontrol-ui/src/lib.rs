@@ -56,12 +56,21 @@ pub fn open(config: &Config) -> WlResult<()> {
     let qml_path = materialize_qml(&dir)?;
     let backend = env::current_exe()
         .map_err(|err| WlError::Config(format!("failed to locate backend binary: {err}")))?;
+    let color_load = config.load_ui_colors();
+    let theme_json = serde_json::to_string(&color_load.colors)?;
+    let theme_degraded = color_load
+        .degraded
+        .as_ref()
+        .map(|degraded| degraded.message.as_str())
+        .unwrap_or("");
 
     let mut child = Command::new("quickshell")
         .arg("--path")
         .arg(&qml_path)
         .arg("--no-duplicate")
         .env("NIXLING_WLCONTROL_BIN", backend)
+        .env("NIXLING_WLCONTROL_THEME_JSON", theme_json)
+        .env("NIXLING_WLCONTROL_THEME_DEGRADED", theme_degraded)
         .env(
             "NIXLING_WLCONTROL_OBSERVABILITY_ENABLED",
             if config.observability.enabled && config.observability.url.is_some() {
@@ -200,7 +209,8 @@ fn cmdline_matches_quickshell(pid: u32, runtime_dir: &Path) -> bool {
 ///
 /// Notes:
 /// - Uses argv-vector `Process` commands; no shell strings.
-/// - Colours are explicit Catppuccin/Waybar-style tokens.
+/// - Colours prefer nixling color artifact data and fall back to visible
+///   Catppuccin/Waybar-style tokens.
 /// - The panel is a draggable layer-shell overlay anchored near the top-right.
 const QML_SOURCE: &str = r##"
 //@ pragma StateDir $XDG_STATE_HOME/nixling-wlcontrol/quickshell
@@ -226,6 +236,20 @@ ShellRoot {
   property string confirmKey: ""
   property bool observabilityEnabled: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
   property string observabilitySuccess: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
+  property string themeDegraded: Quickshell.env("NIXLING_WLCONTROL_THEME_DEGRADED") || ""
+  property var fallbackStateColors: ({
+    running: "#a6e3a1",
+    transitioning: "#f9e2af",
+    pendingRestart: "#fab387",
+    error: "#f38ba8",
+    denied: "#cba6f7",
+    unknown: "#6c7086"
+  })
+  property string fallbackHostAccent: "#89b4fa"
+  property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_THEME_JSON"))
+  property var stateColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_STATE_COLORS"))
+  property var envColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_ENV_COLORS"))
+  property var vmColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_VM_COLORS"))
 
   function visibleVms() {
     const vms = state.vms || []
@@ -243,20 +267,80 @@ ShellRoot {
     return visibleVms().filter(v => v.state === "running").length
   }
 
-  function vmDotColor(vm) {
-    if (vm.state === "running") return "#a6e3a1"
-    if (vm.state === "starting" || vm.state === "stopping") return "#f9e2af"
-    if (vm.pendingRestart) return "#fab387"
-    return "#6c7086"
+  function parseJsonObject(text) {
+    if (!text || text.length === 0) return ({})
+    try {
+      const parsed = JSON.parse(text)
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : ({})
+    } catch (e) {
+      return ({})
+    }
+  }
+
+  function statusTheme() {
+    const candidate = state.uiColors || state.colorTheme || state.theme || ({})
+    return candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate : ({})
+  }
+
+  function themeSection(name) {
+    const fromStatus = statusTheme()[name]
+    if (fromStatus && typeof fromStatus === "object" && !Array.isArray(fromStatus)) return fromStatus
+    const fromEnv = artifactThemeEnv[name]
+    if (fromEnv && typeof fromEnv === "object" && !Array.isArray(fromEnv)) return fromEnv
+    return ({})
+  }
+
+  function isHexColor(value) {
+    return typeof value === "string" && /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value)
+  }
+
+  function colorOr(value, fallback) {
+    return isHexColor(value) ? value : fallback
+  }
+
+  function stateColor(name) {
+    const states = themeSection("states")
+    return colorOr(states[name], colorOr(stateColorsEnv[name], fallbackStateColors[name] || fallbackStateColors.unknown))
+  }
+
+  function hostAccentColor() {
+    const host = themeSection("host")
+    return colorOr(host.accent, colorOr(Quickshell.env("NIXLING_WLCONTROL_HOST_ACCENT"), fallbackHostAccent))
   }
 
   function envAccentColor(env) {
-    // Match waybar group accent colors: work=orange, personal=green, default=blue
-    if (!env) return "#89b4fa"
-    const e = env.toLowerCase()
-    if (e === "work") return "#ffa500"
-    if (e === "personal") return "#a6e3a1"
-    return "#89b4fa"
+    if (!env) return hostAccentColor()
+    const envs = themeSection("envs")
+    const themed = envs[env]
+    const flattened = envColorsEnv[env]
+    const themedAccent = themed && typeof themed === "object" ? themed.accent : themed
+    const flattenedAccent = flattened && typeof flattened === "object" ? flattened.accent : flattened
+    return colorOr(themedAccent, colorOr(flattenedAccent, hostAccentColor()))
+  }
+
+  function vmBorderTheme(vm) {
+    if (!vm || !vm.name) return ({})
+    const vms = themeSection("vms")
+    const themed = vms[vm.name]
+    const flattened = vmColorsEnv[vm.name]
+    const themedBorder = themed && typeof themed === "object" ? (themed.border || themed) : ({})
+    return themedBorder && Object.keys(themedBorder).length > 0
+      ? themedBorder
+      : (flattened && typeof flattened === "object" ? (flattened.border || flattened) : ({}))
+  }
+
+  function vmBorderColor(vm) {
+    const border = vmBorderTheme(vm)
+    if (vm.pendingRestart || vm.state === "unknown") return colorOr(border.urgent, stateColor("pendingRestart"))
+    if (vm.state === "running") return colorOr(border.active, envAccentColor(vm.env))
+    return colorOr(border.inactive, "#2a2d35")
+  }
+
+  function vmDotColor(vm) {
+    if (vm.pendingRestart) return stateColor("pendingRestart")
+    if (vm.state === "running") return stateColor("running")
+    if (vm.state === "starting" || vm.state === "stopping") return stateColor("transitioning")
+    return stateColor("unknown")
   }
 
   function vmGlyph(vm) {
@@ -311,6 +395,7 @@ ShellRoot {
 
   function statusText() {
     if (actionMessage.length > 0) return actionMessage
+    if (themeDegraded.length > 0 && state.connectivity === "connected") return "theme fallback"
     if (busy) return "working…"
     if (state.connectivity === "connected") return "live"
     if (state.connectivity === "auth-denied") return "auth denied"
@@ -616,7 +701,7 @@ ShellRoot {
               anchors.verticalCenter: parent.verticalCenter
               Text {
                 anchors.centerIn: parent
-                color: root.state.connectivity === "connected" ? "#a6e3a1" : "#f38ba8"
+                color: root.state.connectivity === "connected" ? root.stateColor("running") : root.stateColor(root.state.connectivity === "auth-denied" ? "denied" : "error")
                 font.pixelSize: 11
                 font.bold: true
                 text: root.state.role || "none"
@@ -685,14 +770,14 @@ ShellRoot {
             height: visible ? Math.max(26, actionResult.implicitHeight + 10) : 0
             radius: 10
             color: root.actionFailed ? "#2e1a1a" : "#1a2e1a"
-            border.color: root.actionFailed ? "#f38ba8" : "#a6e3a1"
+            border.color: root.actionFailed ? root.stateColor("error") : root.stateColor("running")
             border.width: 1
 
             Text {
               id: actionResult
               anchors.fill: parent
               anchors.margins: 6
-              color: root.actionFailed ? "#f38ba8" : "#a6e3a1"
+              color: root.actionFailed ? root.stateColor("error") : root.stateColor("running")
               font.pixelSize: 11
               elide: Text.ElideRight
               verticalAlignment: Text.AlignVCenter
@@ -726,7 +811,7 @@ ShellRoot {
                   height: cardContent.implicitHeight + 16
                   radius: 13
                   color: "#16181d"
-                  border.color: "#2a2d35"
+                  border.color: root.vmBorderColor(vm)
                   border.width: 1
                   clip: true
 
@@ -735,7 +820,7 @@ ShellRoot {
                   property bool usbEntryVisible: false
                   property string usbEntryText: ""
 
-                  // Left accent border matching waybar env groups
+                  // Left accent border follows the nixling env color contract.
                   Rectangle {
                     id: leftAccent
                     width: 4
@@ -776,7 +861,7 @@ ShellRoot {
                       IconButton {
                         text: vm.state === "running" ? "stop" : "play_arrow"
                         tooltip: enabled ? ((vm.state === "running" ? "Stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin", vm.state === "running" ? "stop" : "start")
-                        accent: vm.state === "running" ? "#f38ba8" : "#a6e3a1"
+                        accent: vm.state === "running" ? root.stateColor("error") : root.stateColor("running")
                         enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
                         prominent: true
                         onClicked: {
@@ -864,7 +949,7 @@ ShellRoot {
                       width: restartText.width + 18
                       radius: 999
                       color: "#2e2a1a"
-                      Text { id: restartText; anchors.centerIn: parent; color: "#fab387"; font.pixelSize: 10; font.bold: true; text: "restart" }
+                      Text { id: restartText; anchors.centerIn: parent; color: root.stateColor("pendingRestart"); font.pixelSize: 10; font.bold: true; text: "restart" }
                     }
                   }
 
@@ -1082,6 +1167,13 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("root.hasCapability(vm, \"usbHotplug\")"));
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
         assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED"));
+        assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_THEME_JSON"));
+        assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_STATE_COLORS"));
+        assert!(QML_SOURCE.contains("function stateColor(name)"));
+        assert!(QML_SOURCE.contains("function vmBorderColor(vm)"));
+        assert!(QML_SOURCE.contains("root.stateColor(\"pendingRestart\")"));
+        assert!(!QML_SOURCE.contains("if (e === \"work\")"));
+        assert!(!QML_SOURCE.contains("if (e === \"personal\")"));
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
     }
 }

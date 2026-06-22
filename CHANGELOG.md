@@ -42,6 +42,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   icon-only system controls, supports config-driven per-VM quick-launch icons,
   launches guest terminals via detached exec, and adds a Signoz observability
   URL button without auto-login handling.
+- **nixling color artifacts.** Waybar CSS imports
+  `/etc/nixling/ui-colors.css`, and the Quickshell popup consumes parsed
+  state, env, and VM border colors from the nixling UI color artifact with
+  visible fallbacks for missing or malformed data.
 - **Safety model.** Public socket only (never the broker socket), no
   `sudo`, no nixling state-file mutation, argv-only command execution,
   and authorization derived from `nixling auth status`.

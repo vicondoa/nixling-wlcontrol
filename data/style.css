@@ -8,32 +8,35 @@
  *   daemon-down | auth-denied | stale
  */
 
+@import url("/etc/nixling/ui-colors.css");
+
 #custom-nixling-wlcontrol {
   padding: 0 8px;
 }
 
 #custom-nixling-wlcontrol.all-stopped {
+  color: var(--nixling-state-unknown, #6c7086);
   opacity: 0.7;
 }
 
 #custom-nixling-wlcontrol.all-running {
-  color: #a6e3a1;
+  color: var(--nixling-state-running, #a6e3a1);
 }
 
 #custom-nixling-wlcontrol.partial-running {
-  color: #f9e2af;
+  color: var(--nixling-state-transitioning, #f9e2af);
 }
 
 #custom-nixling-wlcontrol.attention {
-  color: #fab387;
+  color: var(--nixling-state-pendingRestart, #fab387);
 }
 
 #custom-nixling-wlcontrol.daemon-down {
-  color: #f38ba8;
+  color: var(--nixling-state-error, #f38ba8);
 }
 
 #custom-nixling-wlcontrol.auth-denied {
-  color: #cba6f7;
+  color: var(--nixling-state-denied, #cba6f7);
 }
 
 #custom-nixling-wlcontrol.stale {

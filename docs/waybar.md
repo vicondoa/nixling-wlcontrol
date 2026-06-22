@@ -65,8 +65,23 @@ The renderer emits these classes on `#custom-nixling-wlcontrol`:
 | `auth-denied` | Reachable but no authorized role. |
 | `stale` | State served from cache after a failed refresh. |
 
-The starter CSS only sets state accent colors so the module inherits
-your bar's font, padding, and base styling.
+The starter CSS imports nixling's generated color variables from
+`/etc/nixling/ui-colors.css` and uses the state variables with fallbacks:
+
+| Variable | Used for |
+| --- | --- |
+| `--nixling-state-running` | `all-running` |
+| `--nixling-state-transitioning` | `partial-running` |
+| `--nixling-state-pendingRestart` | `attention` |
+| `--nixling-state-error` | `daemon-down` |
+| `--nixling-state-denied` | `auth-denied` |
+| `--nixling-state-unknown` | `all-stopped` |
+
+The CSS artifact is normally generated at `/etc/nixling/ui-colors.css`.
+If the file is absent or malformed, Waybar still loads the starter style
+and uses the fallback colors embedded in each `var(...)` expression. The
+rules only set state accent colors so the module inherits your bar's
+font, padding, and base styling.
 
 ## Clicks
 
