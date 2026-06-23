@@ -14,7 +14,7 @@ public_socket = "/run/nixling/public.sock"
 
 # Waybar refresh cadence (ms) and per-operation timeout (ms).
 refresh_interval_ms = 2500
-command_timeout_ms = 4000
+command_timeout_ms = 10000
 
 # Hide framework net VMs (sys-*-net) from the compact surfaces.
 hide_net_vms = true
@@ -48,7 +48,7 @@ guest_argv = ["/run/current-system/sw/bin/openterface-run"]
 | --- | --- | --- | --- |
 | `public_socket` | string | `/run/nixling/public.sock` | nixlingd public socket path. |
 | `refresh_interval_ms` | integer | `2500` | Waybar poll cadence. |
-| `command_timeout_ms` | integer | `4000` | Per-operation deadline. |
+| `command_timeout_ms` | integer | `10000` | Per-operation deadline. |
 | `hide_net_vms` | bool | `true` | Hide `sys-*-net` VMs from compact views. |
 | `show_pending_restart` | bool | `true` | Surface the pending-restart marker. |
 | `favorites` | array of string | `[]` | VM names pinned first, in the given order. |
