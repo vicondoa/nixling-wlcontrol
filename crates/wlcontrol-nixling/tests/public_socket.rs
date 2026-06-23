@@ -113,6 +113,38 @@ fn vm_start_dispatch_returns_applied_summary() {
 }
 
 #[test]
+fn vm_stop_dispatch_omits_force_by_default() {
+    let server = FakeNixlingd::start(FakeMode::VmStopOk);
+    let client = client_for(server.path());
+
+    let outcome = client
+        .dispatch(&SocketIntent::VmStop {
+            vm: "corp-vm".to_owned(),
+            force: false,
+        })
+        .expect("dispatch");
+
+    assert_eq!(outcome.summary, "stopped corp-vm");
+    server.join();
+}
+
+#[test]
+fn force_vm_stop_dispatch_sends_force_true() {
+    let server = FakeNixlingd::start(FakeMode::VmForceStopOk);
+    let client = client_for(server.path());
+
+    let outcome = client
+        .dispatch(&SocketIntent::VmStop {
+            vm: "corp-vm".to_owned(),
+            force: true,
+        })
+        .expect("dispatch");
+
+    assert_eq!(outcome.summary, "force stopped corp-vm");
+    server.join();
+}
+
+#[test]
 fn boot_dispatch_returns_applied_summary() {
     let server = FakeNixlingd::start(FakeMode::BootOk);
     let client = client_for(server.path());
@@ -343,6 +375,8 @@ enum FakeMode {
     Refresh,
     RejectHello,
     VmStartOk,
+    VmStopOk,
+    VmForceStopOk,
     BootOk,
     MutatingDryRunPlanned,
     MutatingApiReadyTimeout,
@@ -478,7 +512,7 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
     if let Some(expected) = expected_request {
         assert_eq!(request_type, expected);
     }
-    assert_request_shape(&request, request_type);
+    assert_request_shape(&request, request_type, mode);
 
     match mode {
         FakeMode::InvalidJson => send_payload(&conn, b"{not json").expect("send invalid json"),
@@ -493,7 +527,7 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
     }
 }
 
-fn assert_request_shape(request: &Value, request_type: &str) {
+fn assert_request_shape(request: &Value, request_type: &str, mode: FakeMode) {
     match request_type {
         "authStatus" => assert_eq!(request, &json!({ "type": "authStatus" })),
         "list" => assert_eq!(request, &json!({ "type": "list", "env": null, "vm": null })),
@@ -512,6 +546,29 @@ fn assert_request_shape(request: &Value, request_type: &str) {
                 "json": true
             })
         ),
+        "vmStop" => match mode {
+            FakeMode::VmForceStopOk => assert_eq!(
+                request,
+                &json!({
+                    "type": "vmStop",
+                    "vm": "corp-vm",
+                    "force": true,
+                    "dryRun": false,
+                    "apply": true,
+                    "json": true
+                })
+            ),
+            _ => assert_eq!(
+                request,
+                &json!({
+                    "type": "vmStop",
+                    "vm": "corp-vm",
+                    "dryRun": false,
+                    "apply": true,
+                    "json": true
+                })
+            ),
+        },
         "boot" => assert_eq!(
             request,
             &json!({
@@ -590,6 +647,10 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
             }]
         }),
         (FakeMode::VmStartOk, "vmStart") => mutating_response("applied", "started corp-vm", ""),
+        (FakeMode::VmStopOk, "vmStop") => mutating_response("applied", "stopped corp-vm", ""),
+        (FakeMode::VmForceStopOk, "vmStop") => {
+            mutating_response("applied", "force stopped corp-vm", "")
+        }
         (FakeMode::BootOk, "boot") => {
             mutating_response("applied", "staged corp-vm for next boot", "")
         }

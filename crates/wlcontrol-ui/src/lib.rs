@@ -234,6 +234,8 @@ ShellRoot {
   property real panelTopMargin: 8
   property real panelRightMargin: 8
   property string confirmKey: ""
+  property int normalConfirmMs: 2200
+  property int forceConfirmMs: 5200
   property bool observabilityEnabled: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
   property string observabilitySuccess: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
   property string themeDegraded: Quickshell.env("NIXLING_WLCONTROL_THEME_DEGRADED") || ""
@@ -405,6 +407,25 @@ ShellRoot {
     return canAdminMutate() && vm.state === "running" && hasCapability(vm, "stop")
   }
 
+  function supportsCapability(vm, capability) {
+    const caps = (vm && vm.capabilities) ? vm.capabilities : ({})
+    return caps[capability] === true
+  }
+
+  function canForceStop(vm) {
+    return canAdminMutate() && vm.state === "running" && supportsCapability(vm, "forceStop")
+  }
+
+  function forceStopLabel(vm) {
+    return confirmKey === "force-stop:" + vm.name ? "confirm force" : "force shutdown"
+  }
+
+  function forceStopDisabledReason(vm) {
+    if (state.connectivity !== "connected" || state.role !== "admin" || vm.state !== "running" || busy) return root.disabledReason(vm, "admin", "stop")
+    if (!supportsCapability(vm, "forceStop")) return "Force shutdown is waiting for nixling force-stop support"
+    return root.disabledReason(vm, "admin", "stop")
+  }
+
   function canAdvanced(vm, capability) {
     return canAdminMutate() && vm.state === "running" && hasCapability(vm, capability)
   }
@@ -458,7 +479,8 @@ ShellRoot {
     if (verb === "observability") return "Opening observability..."
     if (verb === "restart") return "Restarting " + vm + "..."
     if (verb === "start") return "Starting " + vm + "..."
-    if (verb === "stop") return "Stopping " + vm + "..."
+    if (verb === "stop") return "Requesting graceful stop for " + vm + "..."
+    if (verb === "force-stop") return "Force shutting down " + vm + " (skipping graceful guest shutdown)..."
     return "Working..."
   }
 
@@ -476,7 +498,8 @@ ShellRoot {
     if (verb === "observability") return observabilitySuccess
     if (verb === "restart") return "Restarted " + vm
     if (verb === "start") return "Started " + vm
-    if (verb === "stop") return "Stopped " + vm
+    if (verb === "stop") return "Graceful stop requested for " + vm
+    if (verb === "force-stop") return "Force shutdown requested for " + vm
     return "Done"
   }
 
@@ -516,7 +539,7 @@ ShellRoot {
     return "Unavailable"
   }
 
-  function confirmAction(key, message, args) {
+  function confirmAction(key, message, args, timeoutMs) {
     if (confirmKey === key) {
       confirmKey = ""
       confirmTimer.stop()
@@ -524,8 +547,15 @@ ShellRoot {
     } else {
       confirmKey = key
       hoverHint = message
+      confirmTimer.interval = timeoutMs || normalConfirmMs
       confirmTimer.restart()
     }
+  }
+
+  function confirmForceStop(vm) {
+    const key = "force-stop:" + vm.name
+    const warning = "Danger: click Force shutdown again to kill " + vm.name + " without graceful guest shutdown"
+    root.confirmAction(key, warning, ["force-stop", vm.name], forceConfirmMs)
   }
 
   Process {
@@ -602,11 +632,12 @@ ShellRoot {
 
   Timer {
     id: confirmTimer
-    interval: 2200
+    interval: root.normalConfirmMs
     repeat: false
     onTriggered: {
       root.confirmKey = ""
-      if (root.hoverHint.indexOf("Click again") === 0) root.hoverHint = ""
+      if (root.hoverHint.indexOf("Click again") === 0 || root.hoverHint.indexOf("Danger:") === 0) root.hoverHint = ""
+      confirmTimer.interval = root.normalConfirmMs
     }
   }
 
@@ -841,12 +872,12 @@ ShellRoot {
                       anchors.verticalCenter: parent.verticalCenter
                       IconButton {
                         text: vm.state === "running" ? "stop" : "play_arrow"
-                        tooltip: enabled ? ((vm.state === "running" ? "Stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin", vm.state === "running" ? "stop" : "start")
-                        accent: vm.state === "running" ? root.stateColor("error") : root.stateColor("running")
+                        tooltip: enabled ? ((vm.state === "running" ? "Gracefully stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin", vm.state === "running" ? "stop" : "start")
+                        accent: vm.state === "running" ? root.stateColor("transitioning") : root.stateColor("running")
                         enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
                         prominent: true
                         onClicked: {
-                          if (vm.state === "running") root.confirmAction("stop:" + vm.name, "Click again to confirm stopping " + vm.name, ["stop", vm.name])
+                          if (vm.state === "running") root.confirmAction("stop:" + vm.name, "Click again to gracefully stop " + vm.name, ["stop", vm.name])
                           else root.action(["start", vm.name])
                         }
                       }
@@ -898,6 +929,22 @@ ShellRoot {
                     IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(vm, "launcher", "build"); accent: "#6c7086"; enabled: root.canMutate() && root.hasCapability(vm, "build"); onClicked: root.action(["build", vm.name]) }
                     IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(vm, "admin", "boot"); accent: "#6c7086"; enabled: root.canAdminMutate() && root.hasCapability(vm, "boot"); onClicked: root.action(["boot", vm.name]) }
                     IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin", "switch"); accent: "#6c7086"; enabled: root.canAdvanced(vm, "switch"); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
+                  }
+
+                  Flow {
+                    id: destructiveControls
+                    visible: expanded
+                    width: parent.width
+                    spacing: 6
+
+                    ControlChip {
+                      icon: "dangerous"
+                      label: root.forceStopLabel(vm)
+                      tooltip: enabled ? ("Force shutdown " + vm.name + "; skips graceful guest shutdown") : root.forceStopDisabledReason(vm)
+                      accent: root.stateColor("error")
+                      enabled: root.canForceStop(vm)
+                      onClicked: root.confirmForceStop(vm)
+                    }
                   }
 
                   Flow {
@@ -1157,6 +1204,21 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("root.stateColor(\"pendingRestart\")"));
         assert!(!QML_SOURCE.contains("if (e === \"work\")"));
         assert!(!QML_SOURCE.contains("if (e === \"personal\")"));
+        assert!(QML_SOURCE.contains("id: destructiveControls"));
+        assert!(QML_SOURCE.contains("function confirmForceStop(vm)"));
+        assert!(QML_SOURCE.contains("[\"force-stop\", vm.name]"));
+        assert!(QML_SOURCE.contains("Danger: click Force shutdown again"));
+        assert!(QML_SOURCE.contains("Force shutdown is waiting for nixling force-stop support"));
+        assert!(QML_SOURCE.contains("Requesting graceful stop"));
+        assert!(QML_SOURCE.contains("skipping graceful guest shutdown"));
+        let primary_start = QML_SOURCE
+            .find("id: actionButtons")
+            .expect("primary controls");
+        let destructive_start = QML_SOURCE
+            .find("id: destructiveControls")
+            .expect("expanded destructive controls");
+        assert!(destructive_start > primary_start);
+        assert!(!QML_SOURCE[primary_start..destructive_start].contains("force-stop"));
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
     }
 }

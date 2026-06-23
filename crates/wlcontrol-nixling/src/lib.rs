@@ -169,8 +169,8 @@ impl NixlingClient {
             SocketIntent::VmStart { vm } => {
                 dispatch_mutating(&transport, "vmStart", json_object([("vm", vm.clone())]))
             }
-            SocketIntent::VmStop { vm } => {
-                dispatch_mutating(&transport, "vmStop", json_object([("vm", vm.clone())]))
+            SocketIntent::VmStop { vm, force } => {
+                dispatch_mutating(&transport, "vmStop", vm_stop_fields(vm, *force))
             }
             SocketIntent::VmRestart { vm } => {
                 dispatch_mutating(&transport, "vmRestart", json_object([("vm", vm.clone())]))
@@ -374,6 +374,14 @@ fn json_object<const N: usize>(fields: [(&str, String); N]) -> Map<String, Value
         .into_iter()
         .map(|(key, value)| (key.to_owned(), Value::String(value)))
         .collect()
+}
+
+fn vm_stop_fields(vm: &str, force: bool) -> Map<String, Value> {
+    let mut fields = json_values([("vm", Value::String(vm.to_owned()))]);
+    if force {
+        fields.insert("force".to_owned(), Value::Bool(true));
+    }
+    fields
 }
 
 fn json_values<const N: usize>(fields: [(&str, Value); N]) -> Map<String, Value> {

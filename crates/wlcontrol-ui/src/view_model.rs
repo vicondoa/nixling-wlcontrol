@@ -81,6 +81,7 @@ pub(crate) fn action_label(action: &ActionKind) -> String {
         ActionKind::Refresh => "Refresh".to_owned(),
         ActionKind::Start { .. } => "Start".to_owned(),
         ActionKind::Stop { .. } => "Stop".to_owned(),
+        ActionKind::ForceStop { .. } => "Force shutdown".to_owned(),
         ActionKind::Restart { .. } => "Restart".to_owned(),
         ActionKind::Switch { .. } => "Switch".to_owned(),
         ActionKind::Build { .. } => "Build".to_owned(),
@@ -119,6 +120,7 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
     match action {
         ActionKind::Start { vm }
         | ActionKind::Stop { vm }
+        | ActionKind::ForceStop { vm }
         | ActionKind::Restart { vm }
         | ActionKind::Switch { vm }
         | ActionKind::Build { vm }
@@ -141,7 +143,10 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
 pub(crate) fn needs_confirmation(action: &ActionKind, vm: &Vm) -> bool {
     matches!(
         action,
-        ActionKind::Stop { .. } | ActionKind::Restart { .. } | ActionKind::Switch { .. }
+        ActionKind::Stop { .. }
+            | ActionKind::ForceStop { .. }
+            | ActionKind::Restart { .. }
+            | ActionKind::Switch { .. }
     ) && vm.state == RuntimeState::Running
 }
 
@@ -369,6 +374,9 @@ mod tests {
     fn only_destructive_running_vm_actions_need_confirmation() {
         let destructive_actions = [
             ActionKind::Stop {
+                vm: "corp-vm".to_owned(),
+            },
+            ActionKind::ForceStop {
                 vm: "corp-vm".to_owned(),
             },
             ActionKind::Restart {

@@ -238,6 +238,8 @@ pub enum ActionKind {
     Start { vm: String },
     /// Stop a VM (`--apply`).
     Stop { vm: String },
+    /// Force stop a VM, bypassing graceful guest shutdown.
+    ForceStop { vm: String },
     /// Restart a VM (`--apply`).
     Restart { vm: String },
     /// Activate the VM's current closure (`switch --apply`).
@@ -344,17 +346,43 @@ pub enum PlannedAction {
 #[serde(rename_all = "kebab-case", tag = "intent")]
 pub enum SocketIntent {
     List,
-    Status { vm: String },
+    Status {
+        vm: String,
+    },
     AuthStatus,
     UsbProbe,
-    VmStart { vm: String },
-    VmStop { vm: String },
-    VmRestart { vm: String },
-    Switch { vm: String },
-    Boot { vm: String },
-    UsbAttach { vm: String, bus_id: String },
-    UsbDetach { vm: String, bus_id: String },
-    StoreVerify { vm: String },
+    VmStart {
+        vm: String,
+    },
+    VmStop {
+        vm: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        force: bool,
+    },
+    VmRestart {
+        vm: String,
+    },
+    Switch {
+        vm: String,
+    },
+    Boot {
+        vm: String,
+    },
+    UsbAttach {
+        vm: String,
+        bus_id: String,
+    },
+    UsbDetach {
+        vm: String,
+        bus_id: String,
+    },
+    StoreVerify {
+        vm: String,
+    },
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]
@@ -488,6 +516,9 @@ mod tests {
             ActionKind::Boot {
                 vm: "corp-vm".into(),
             },
+            ActionKind::ForceStop {
+                vm: "corp-vm".into(),
+            },
             ActionKind::AudioMic {
                 vm: "corp-vm".into(),
                 on: true,
@@ -510,5 +541,28 @@ mod tests {
         let json = serde_json::to_string(&ActionKind::OpenObservability).expect("serialize action");
         let back: ActionKind = serde_json::from_str(&json).expect("deserialize action");
         assert_eq!(back, ActionKind::OpenObservability);
+    }
+
+    #[test]
+    fn vm_stop_socket_intent_defaults_force_false_for_compatibility() {
+        let intent: SocketIntent =
+            serde_json::from_str(r#"{"intent":"vm-stop","vm":"corp-vm"}"#).expect("deserialize");
+        assert_eq!(
+            intent,
+            SocketIntent::VmStop {
+                vm: "corp-vm".into(),
+                force: false
+            }
+        );
+
+        let normal_json = serde_json::to_string(&intent).expect("serialize");
+        assert!(!normal_json.contains("force"));
+
+        let force_json = serde_json::to_string(&SocketIntent::VmStop {
+            vm: "corp-vm".into(),
+            force: true,
+        })
+        .expect("serialize");
+        assert!(force_json.contains(r#""force":true"#));
     }
 }

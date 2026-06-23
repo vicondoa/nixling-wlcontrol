@@ -47,13 +47,14 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
             .map(|_| Unavailable::VmState {
                 detail: "VM is already running".into(),
             }),
-        ActionKind::Stop { vm } | ActionKind::Restart { vm } | ActionKind::Switch { vm } => {
-            running_vm(state, vm)
-                .filter(|v| v.state == RuntimeState::Stopped)
-                .map(|_| Unavailable::VmState {
-                    detail: "VM is not running".into(),
-                })
-        }
+        ActionKind::Stop { vm }
+        | ActionKind::ForceStop { vm }
+        | ActionKind::Restart { vm }
+        | ActionKind::Switch { vm } => running_vm(state, vm)
+            .filter(|v| v.state == RuntimeState::Stopped)
+            .map(|_| Unavailable::VmState {
+                detail: "VM is not running".into(),
+            }),
         ActionKind::LaunchTerminal { vm } => running_vm(state, vm)
             .filter(|v| v.state != RuntimeState::Running)
             .map(|_| Unavailable::VmState {
@@ -76,7 +77,7 @@ fn capability_block(action: &ActionKind, state: &WlState) -> Option<Unavailable>
     let target = running_vm(state, vm)?;
     let supported = match action {
         ActionKind::Start { .. } => target.capabilities.start,
-        ActionKind::Stop { .. } => target.capabilities.stop,
+        ActionKind::Stop { .. } | ActionKind::ForceStop { .. } => target.capabilities.stop,
         ActionKind::Restart { .. } => target.capabilities.restart,
         ActionKind::Switch { .. } => target.capabilities.switch,
         ActionKind::Build { .. } => target.capabilities.build,
@@ -99,6 +100,7 @@ fn action_target_vm(action: &ActionKind) -> Option<&str> {
     match action {
         ActionKind::Start { vm }
         | ActionKind::Stop { vm }
+        | ActionKind::ForceStop { vm }
         | ActionKind::Restart { vm }
         | ActionKind::Switch { vm }
         | ActionKind::Build { vm }
@@ -123,6 +125,7 @@ pub fn vm_actions(state: &WlState, config: &Config, vm: &str) -> Vec<ActionAvail
     let mut actions = vec![
         ActionKind::Start { vm: vm.into() },
         ActionKind::Stop { vm: vm.into() },
+        ActionKind::ForceStop { vm: vm.into() },
         ActionKind::Restart { vm: vm.into() },
         ActionKind::LaunchTerminal { vm: vm.into() },
         ActionKind::StoreVerify { vm: vm.into() },
@@ -177,7 +180,14 @@ pub fn plan(
 
     let dispatch = match action {
         ActionKind::Start { vm } => socket(SocketIntent::VmStart { vm: vm.clone() }),
-        ActionKind::Stop { vm } => socket(SocketIntent::VmStop { vm: vm.clone() }),
+        ActionKind::Stop { vm } => socket(SocketIntent::VmStop {
+            vm: vm.clone(),
+            force: false,
+        }),
+        ActionKind::ForceStop { vm } => socket(SocketIntent::VmStop {
+            vm: vm.clone(),
+            force: true,
+        }),
         ActionKind::Restart { vm } => socket(SocketIntent::VmRestart { vm: vm.clone() }),
         ActionKind::Switch { vm } => socket(SocketIntent::Switch { vm: vm.clone() }),
         ActionKind::Build { vm } => build_argv(vm),
@@ -259,6 +269,7 @@ fn required_role(action: &ActionKind) -> AuthRole {
         | ActionKind::QuickLaunch { .. }
         | ActionKind::Start { .. }
         | ActionKind::Stop { .. }
+        | ActionKind::ForceStop { .. }
         | ActionKind::Restart { .. }
         | ActionKind::Switch { .. }
         | ActionKind::Boot { .. }
@@ -548,6 +559,9 @@ mod tests {
             ActionKind::Stop {
                 vm: "corp-vm".into(),
             },
+            ActionKind::ForceStop {
+                vm: "corp-vm".into(),
+            },
             ActionKind::Restart {
                 vm: "corp-vm".into(),
             },
@@ -577,6 +591,9 @@ mod tests {
             ActionKind::Stop {
                 vm: "corp-vm".into(),
             },
+            ActionKind::ForceStop {
+                vm: "corp-vm".into(),
+            },
             ActionKind::Restart {
                 vm: "corp-vm".into(),
             },
@@ -597,6 +614,9 @@ mod tests {
         assert!(plan(&terminal, &running_admin, &Config::default()).is_ok());
         for action in [
             ActionKind::Stop {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::ForceStop {
                 vm: "corp-vm".into(),
             },
             ActionKind::Restart {
@@ -733,29 +753,31 @@ mod tests {
 
         let actions = vm_actions(&state, &Config::default(), "corp-vm");
 
-        assert_eq!(actions.len(), 13);
+        assert_eq!(actions.len(), 14);
         assert!(matches!(&actions[0].action, ActionKind::Start { .. }));
-        assert!(matches!(&actions[5].action, ActionKind::Build { .. }));
-        assert!(matches!(&actions[6].action, ActionKind::Boot { .. }));
-        assert!(matches!(&actions[7].action, ActionKind::Switch { .. }));
-        assert!(matches!(&actions[8].action, ActionKind::UsbAttach { .. }));
-        assert!(matches!(&actions[9].action, ActionKind::UsbDetach { .. }));
-        assert!(matches!(&actions[10].action, ActionKind::AudioMic { .. }));
-        assert!(matches!(
-            actions[10].unavailable.as_ref(),
-            Some(Unavailable::NotYetImplemented)
-        ));
-        assert!(matches!(
-            &actions[11].action,
-            ActionKind::AudioSpeaker { .. }
-        ));
+        assert!(matches!(&actions[1].action, ActionKind::Stop { .. }));
+        assert!(matches!(&actions[2].action, ActionKind::ForceStop { .. }));
+        assert!(matches!(&actions[6].action, ActionKind::Build { .. }));
+        assert!(matches!(&actions[7].action, ActionKind::Boot { .. }));
+        assert!(matches!(&actions[8].action, ActionKind::Switch { .. }));
+        assert!(matches!(&actions[9].action, ActionKind::UsbAttach { .. }));
+        assert!(matches!(&actions[10].action, ActionKind::UsbDetach { .. }));
+        assert!(matches!(&actions[11].action, ActionKind::AudioMic { .. }));
         assert!(matches!(
             actions[11].unavailable.as_ref(),
             Some(Unavailable::NotYetImplemented)
         ));
-        assert!(matches!(&actions[12].action, ActionKind::AudioOff { .. }));
+        assert!(matches!(
+            &actions[12].action,
+            ActionKind::AudioSpeaker { .. }
+        ));
         assert!(matches!(
             actions[12].unavailable.as_ref(),
+            Some(Unavailable::NotYetImplemented)
+        ));
+        assert!(matches!(&actions[13].action, ActionKind::AudioOff { .. }));
+        assert!(matches!(
+            actions[13].unavailable.as_ref(),
             Some(Unavailable::NotYetImplemented)
         ));
     }
@@ -820,6 +842,47 @@ mod tests {
             PlannedAction::Socket {
                 intent: SocketIntent::Boot {
                     vm: "corp-vm".into()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn stop_plans_graceful_by_default_and_force_sets_socket_flag() {
+        let state = connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
+
+        let normal = plan(
+            &ActionKind::Stop {
+                vm: "corp-vm".into(),
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect("normal stop plannable");
+        assert_eq!(
+            normal,
+            PlannedAction::Socket {
+                intent: SocketIntent::VmStop {
+                    vm: "corp-vm".into(),
+                    force: false
+                }
+            }
+        );
+
+        let force = plan(
+            &ActionKind::ForceStop {
+                vm: "corp-vm".into(),
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect("force stop plannable");
+        assert_eq!(
+            force,
+            PlannedAction::Socket {
+                intent: SocketIntent::VmStop {
+                    vm: "corp-vm".into(),
+                    force: true
                 }
             }
         );
