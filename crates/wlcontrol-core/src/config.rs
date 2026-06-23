@@ -180,7 +180,7 @@ impl Default for Config {
         Self {
             public_socket: "/run/nixling/public.sock".to_owned(),
             refresh_interval_ms: 2500,
-            command_timeout_ms: 4000,
+            command_timeout_ms: 10000,
             hide_net_vms: true,
             show_pending_restart: true,
             favorites: Vec::new(),

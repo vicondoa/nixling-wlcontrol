@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   with destructive styling and strong two-click confirmation, and distinguishes
   graceful Stop messaging from force-stop messaging while the nixling
   force-stop contract lands.
+- **nixlingd refresh timeout.** Raised the default public-socket operation
+  timeout to tolerate slower full-host status refreshes without reporting
+  `daemon-down` while nixling status probes settle.
 - **Quickshell VM card colors.** VM card borders now use environment
   accents instead of compositor-oriented per-VM border colors, keeping
   card identity aligned with the left accent stripe.
