@@ -387,7 +387,7 @@ enum FakeMode {
     AcceptThenStall,
     CloseAfterHello,
     /// Answer `authStatus` successfully, then close the next connection
-    /// (the inventory request) before responding — exercising a transport
+    /// (the status-model request) before responding — exercising a transport
     /// failure that happens AFTER auth succeeds.
     RefreshAuthThenClose,
     InvalidJson,
@@ -441,13 +441,13 @@ impl FakeNixlingd {
 
 fn serve(listener: OwnedFd, mode: FakeMode) {
     if mode == FakeMode::Refresh {
-        for expected in ["authStatus", "list", "status", "usbipProbe"] {
+        for expected in ["authStatus", "status"] {
             serve_connection(&listener, mode, Some(expected));
         }
     } else if mode == FakeMode::RefreshAuthThenClose {
         // Connection 1: answer authStatus like a healthy Refresh.
         serve_connection(&listener, FakeMode::Refresh, Some("authStatus"));
-        // Connection 2 (inventory): handshake, then close before responding.
+        // Connection 2 (status model): handshake, then close before responding.
         serve_connection(&listener, FakeMode::CloseAfterHello, None);
     } else {
         serve_connection(&listener, mode, None);
@@ -531,10 +531,17 @@ fn assert_request_shape(request: &Value, request_type: &str, mode: FakeMode) {
     match request_type {
         "authStatus" => assert_eq!(request, &json!({ "type": "authStatus" })),
         "list" => assert_eq!(request, &json!({ "type": "list", "env": null, "vm": null })),
-        "status" => assert_eq!(
-            request,
-            &json!({ "type": "status", "vm": "corp-vm", "checkBridges": false })
-        ),
+        "status" => {
+            assert_eq!(
+                request.get("checkBridges").and_then(Value::as_bool),
+                Some(false)
+            );
+            assert!(
+                request.get("vm") == Some(&Value::Null)
+                    || request.get("vm").and_then(Value::as_str) == Some("corp-vm"),
+                "unexpected status vm field: {request}"
+            );
+        }
         "usbipProbe" => assert_eq!(request, &json!({ "type": "usbipProbe" })),
         "vmStart" => assert_eq!(
             request,
@@ -614,7 +621,7 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
         }),
         (FakeMode::Refresh, "status") => json!({
             "type": "statusResponse",
-            "status": {
+            "vms": [{
                 "bridgeChecks": [],
                 "env": "work",
                 "lifecycle": {
@@ -632,8 +639,18 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                 },
                 "sshUser": "alice",
                 "staticIp": "10.1.0.10",
-                "vm": "corp-vm"
-            }
+                "vm": "corp-vm",
+                "usb": {
+                    "entries": [{
+                        "vm": "corp-vm",
+                        "env": "work",
+                        "busId": "1-2",
+                        "lockPath": "/run/nixling/usbip/corp-vm-1-2.lock",
+                        "status": "bound",
+                        "ownerVm": "corp-vm"
+                    }]
+                }
+            }]
         }),
         (FakeMode::Refresh, "usbipProbe") => json!({
             "type": "usbipProbeResponse",
