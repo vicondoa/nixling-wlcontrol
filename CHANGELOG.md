@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Fast status refresh.** `status-json` now consumes nixling's unfiltered
+  daemon status read model in one public-socket request instead of running
+  per-VM status and deep USB probe calls during UI refresh.
 - **Force shutdown affordance.** The Quickshell popup keeps force shutdown out
   of the primary VM button, scaffolds it only inside ellipsis-expanded controls
   with destructive styling and strong two-click confirmation, and distinguishes

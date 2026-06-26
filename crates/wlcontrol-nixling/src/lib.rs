@@ -70,8 +70,7 @@ impl NixlingClient {
         self.timeout
     }
 
-    /// Collect one full refresh bundle: auth, inventory, per-VM statuses, and
-    /// USB claims, translated into neutral [`ReduceInput`] fragments.
+    /// Collect one full refresh bundle from the daemon's fast status model.
     ///
     pub fn refresh(&self) -> ReduceInput {
         match self.try_refresh() {
@@ -94,47 +93,17 @@ impl NixlingClient {
     pub fn try_refresh(&self) -> WlResult<ReduceInput> {
         let auth = self.request(request_auth_status)?;
 
-        // After auth succeeds, a transport / protocol / timeout failure on any
-        // core query means the connection or daemon is now unhealthy. Propagate
-        // it so `refresh` degrades to daemon-down instead of returning a
-        // false-healthy "Connected with zero VMs" snapshot (each `request`
-        // reconnects, so these are independent calls).
-        let mut inventory = self.request(request_inventory)?;
-        let status_snapshots = inventory
-            .vms
-            .iter()
-            .map(|vm| self.request(|transport| request_status_snapshot(transport, &vm.name)))
-            .collect::<WlResult<Vec<_>>>()?;
-
-        for vm in &mut inventory.vms {
-            if let Some(snapshot) = status_snapshots
-                .iter()
-                .find(|snapshot| snapshot.status.name == vm.name)
-            {
-                vm.static_ip = snapshot.static_ip.clone();
-            }
-        }
-        let statuses = status_snapshots
-            .into_iter()
-            .map(|snapshot| snapshot.status)
-            .collect::<Vec<_>>();
-
-        // USB probe is best-effort ONLY for daemon-healthy typed errors: a
-        // broker reconcile failure surfaces as `WlError::Nixling`, so show no
-        // USB claims but keep the VM view. A transport / protocol / timeout
-        // failure still degrades the whole refresh.
-        let usb = match self.request(request_usb_probe) {
-            Ok(usb) => Some(usb),
-            Err(WlError::Nixling(_)) => None,
-            Err(err) => return Err(err),
-        };
+        // After auth succeeds, one unfiltered status read gives wlcontrol the
+        // daemon-maintained fast model. Do not run per-VM status or deep USB
+        // probe calls on the UI refresh path.
+        let status = self.request(request_status_model)?;
 
         Ok(ReduceInput {
             connectivity: Connectivity::Connected,
             auth: Some(auth),
-            inventory: Some(inventory),
-            statuses,
-            usb,
+            inventory: Some(status.inventory),
+            statuses: status.statuses,
+            usb: Some(status.usb),
         })
     }
 
@@ -278,6 +247,19 @@ fn request_status_snapshot(transport: &SeqpacketTransport, vm: &str) -> WlResult
             "status response did not contain an entry for VM '{vm}'"
         ))
     })
+}
+
+fn request_status_model(transport: &SeqpacketTransport) -> WlResult<StatusModelSnapshot> {
+    let value = request_value(
+        transport,
+        frame(
+            "status",
+            json_values([("checkBridges", Value::Bool(false)), ("vm", Value::Null)]),
+        )?,
+    )?;
+    let payload = response_payload(value, "statusResponse", "status", None)?;
+    status_model_from_payload(&payload)
+        .ok_or_else(|| WlError::Protocol("status response did not contain VM entries".to_owned()))
 }
 
 fn request_usb_probe(transport: &SeqpacketTransport) -> WlResult<UsbProbe> {
@@ -591,10 +573,66 @@ struct StatusSnapshot {
     static_ip: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct StatusModelSnapshot {
+    inventory: Inventory,
+    statuses: Vec<VmStatus>,
+    usb: UsbProbe,
+}
+
+fn status_model_from_payload(payload: &Value) -> Option<StatusModelSnapshot> {
+    let entries = status_entries(payload)?;
+    let mut inventory = Vec::with_capacity(entries.len());
+    let mut statuses = Vec::with_capacity(entries.len());
+    let mut claims = Vec::new();
+
+    for entry in entries {
+        let snapshot = status_snapshot_from_entry(entry, None)?;
+        let mut vm = inventory_vm_from_value(entry)?;
+        vm.static_ip = snapshot.static_ip.clone();
+        for claim in usb_claims_from_status_entry(entry) {
+            claims.push(claim);
+        }
+        inventory.push(vm);
+        statuses.push(snapshot.status);
+    }
+
+    Some(StatusModelSnapshot {
+        inventory: Inventory { vms: inventory },
+        statuses,
+        usb: UsbProbe { claims },
+    })
+}
+
+fn status_entries(payload: &Value) -> Option<Vec<&Value>> {
+    if let Some(entries) = payload.get("vms").and_then(Value::as_array) {
+        return Some(entries.iter().collect());
+    }
+    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
+        return Some(entries.iter().collect());
+    }
+    if let Some(status) = payload.get("status") {
+        if let Some(entries) = status.get("vms").and_then(Value::as_array) {
+            return Some(entries.iter().collect());
+        }
+        if let Some(entries) = status.get("entries").and_then(Value::as_array) {
+            return Some(entries.iter().collect());
+        }
+    }
+    None
+}
+
 fn status_snapshot_from_payload(payload: &Value, requested_vm: &str) -> Option<StatusSnapshot> {
     let candidate = status_candidate(payload, requested_vm)?;
+    status_snapshot_from_entry(candidate, Some(requested_vm))
+}
 
-    let name = string_field(candidate, &["name", "vm"]).unwrap_or_else(|| requested_vm.to_owned());
+fn status_snapshot_from_entry(
+    candidate: &Value,
+    fallback_name: Option<&str>,
+) -> Option<StatusSnapshot> {
+    let name =
+        string_field(candidate, &["name", "vm"]).or_else(|| fallback_name.map(str::to_owned))?;
     let pending_restart = candidate
         .get("lifecycle")
         .and_then(|lifecycle| bool_field(lifecycle, &["pendingRestart"]))
@@ -624,6 +662,15 @@ fn status_snapshot_from_payload(payload: &Value, requested_vm: &str) -> Option<S
         },
         static_ip,
     })
+}
+
+fn usb_claims_from_status_entry(entry: &Value) -> Vec<UsbClaim> {
+    entry
+        .get("usb")
+        .and_then(|usb| usb.get("entries").or(Some(usb)))
+        .and_then(Value::as_array)
+        .map(|entries| entries.iter().filter_map(usb_claim_from_value).collect())
+        .unwrap_or_default()
 }
 
 fn status_candidate<'a>(payload: &'a Value, requested_vm: &str) -> Option<&'a Value> {
