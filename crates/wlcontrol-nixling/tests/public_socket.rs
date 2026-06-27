@@ -113,6 +113,21 @@ fn vm_start_dispatch_returns_applied_summary() {
 }
 
 #[test]
+fn vm_restart_dispatch_uses_no_wait_api() {
+    let server = FakeNixlingd::start(FakeMode::VmRestartOk);
+    let client = client_for(server.path());
+
+    let outcome = client
+        .dispatch(&SocketIntent::VmRestart {
+            vm: "corp-vm".to_owned(),
+        })
+        .expect("dispatch");
+
+    assert_eq!(outcome.summary, "restarted corp-vm");
+    server.join();
+}
+
+#[test]
 fn vm_stop_dispatch_omits_force_by_default() {
     let server = FakeNixlingd::start(FakeMode::VmStopOk);
     let client = client_for(server.path());
@@ -375,6 +390,7 @@ enum FakeMode {
     Refresh,
     RejectHello,
     VmStartOk,
+    VmRestartOk,
     VmStopOk,
     VmForceStopOk,
     BootOk,
@@ -548,6 +564,18 @@ fn assert_request_shape(request: &Value, request_type: &str, mode: FakeMode) {
             &json!({
                 "type": "vmStart",
                 "vm": "corp-vm",
+                "noWaitApi": true,
+                "dryRun": false,
+                "apply": true,
+                "json": true
+            })
+        ),
+        "vmRestart" => assert_eq!(
+            request,
+            &json!({
+                "type": "vmRestart",
+                "vm": "corp-vm",
+                "noWaitApi": true,
                 "dryRun": false,
                 "apply": true,
                 "json": true
@@ -664,6 +692,9 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
             }]
         }),
         (FakeMode::VmStartOk, "vmStart") => mutating_response("applied", "started corp-vm", ""),
+        (FakeMode::VmRestartOk, "vmRestart") => {
+            mutating_response("applied", "restarted corp-vm", "")
+        }
         (FakeMode::VmStopOk, "vmStop") => mutating_response("applied", "stopped corp-vm", ""),
         (FakeMode::VmForceStopOk, "vmStop") => {
             mutating_response("applied", "force stopped corp-vm", "")

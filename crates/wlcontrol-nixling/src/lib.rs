@@ -135,15 +135,25 @@ impl NixlingClient {
                     summary: format!("probed {} USB claim(s)", probe.claims.len()),
                 })
             }
-            SocketIntent::VmStart { vm } => {
-                dispatch_mutating(&transport, "vmStart", json_object([("vm", vm.clone())]))
-            }
+            SocketIntent::VmStart { vm } => dispatch_mutating(
+                &transport,
+                "vmStart",
+                json_values([
+                    ("vm", Value::String(vm.clone())),
+                    ("noWaitApi", Value::Bool(true)),
+                ]),
+            ),
             SocketIntent::VmStop { vm, force } => {
                 dispatch_mutating(&transport, "vmStop", vm_stop_fields(vm, *force))
             }
-            SocketIntent::VmRestart { vm } => {
-                dispatch_mutating(&transport, "vmRestart", json_object([("vm", vm.clone())]))
-            }
+            SocketIntent::VmRestart { vm } => dispatch_mutating(
+                &transport,
+                "vmRestart",
+                json_values([
+                    ("vm", Value::String(vm.clone())),
+                    ("noWaitApi", Value::Bool(true)),
+                ]),
+            ),
             SocketIntent::Switch { vm } => {
                 dispatch_mutating(&transport, "switch", json_object([("vm", vm.clone())]))
             }

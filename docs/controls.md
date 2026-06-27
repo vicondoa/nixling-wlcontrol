@@ -19,7 +19,7 @@ silently.
 | Show declared VMs | on | none | `nixling list` | VM set, env, features, order. |
 | Show per-VM runtime | on | none | `nixling status <vm>` | Runtime/readiness/pending-restart truth. |
 | USB probe | on | none | `nixling usb probe` | Read-only claim/ownership view. |
-| Start / Stop / Restart | on | admin | `vm start|stop|restart --apply` | Explicit apply; Stop is the normal graceful guest-shutdown path when nixling supports it. |
+| Start / Stop / Restart | on | admin | `vm start|stop|restart --apply` | Start and Restart use nixlingd `noWaitApi=true` so the UI returns once the VM process is supervised; the normal status refresh shows readiness convergence. Stop is the normal graceful guest-shutdown path when nixling supports it. |
 | Force shutdown | ellipsis-expanded only | admin | pending nixling force-stop socket/CLI contract | Emergency override only; never a primary visible button. Requires destructive styling and a two-click confirmation because it skips graceful guest shutdown. |
 | Store verify | advanced icon | admin | `store verify` | Check live-pool/store integrity. |
 | Build | advanced icon | launcher | `nixling build <vm>` | Build/evaluate the VM toplevel without activating it. |

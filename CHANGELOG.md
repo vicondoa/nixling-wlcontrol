@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Fast VM lifecycle.** Start and Restart actions now send nixlingd
+  `noWaitApi=true`, so the control surface returns success once the VM process
+  is supervised and lets the normal status refresh show api-ready/readiness
+  convergence later.
 - **Fast status refresh.** `status-json` now consumes nixling's unfiltered
   daemon status read model in one public-socket request instead of running
   per-VM status and deep USB probe calls during UI refresh.
