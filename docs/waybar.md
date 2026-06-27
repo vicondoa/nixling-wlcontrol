@@ -1,6 +1,6 @@
 # Waybar integration
 
-`nixling-wlcontrol waybar` is a **continuous** Waybar custom module: it
+`d2b-wlcontrol waybar` is a **continuous** Waybar custom module: it
 loops, emits one newline-terminated JSON object per refresh, and flushes
 stdout each time. Because it self-loops, it must **not** be given an
 `interval`.
@@ -10,29 +10,29 @@ stdout each time. Because it self-loops, it must **not** be given an
 Generate a starter snippet:
 
 ```bash
-nixling-wlcontrol print-waybar-config
+d2b-wlcontrol print-waybar-config
 ```
 
 ```jsonc
-"custom/nixling-wlcontrol": {
-  "exec": "nixling-wlcontrol waybar",
+"custom/d2b-wlcontrol": {
+  "exec": "d2b-wlcontrol waybar",
   "return-type": "json",
   "restart-interval": 5,
   "signal": 8,
-  "on-click": "nixling-wlcontrol open",
-  "on-click-right": "nixling-wlcontrol action cycle-display",
-  "on-click-middle": "nixling-wlcontrol action refresh",
+  "on-click": "d2b-wlcontrol open",
+  "on-click-right": "d2b-wlcontrol action cycle-display",
+  "on-click-middle": "d2b-wlcontrol action refresh",
   "tooltip": true
 }
 ```
 
 The `"signal": 8` key pairs with the module's `SIGRTMIN+8` handler so
-`nixling-wlcontrol action cycle-display` (and any other instance) can
+`d2b-wlcontrol action cycle-display` (and any other instance) can
 refresh the bar on demand.
 
-Add `"custom/nixling-wlcontrol"` to one of your `modules-left` /
+Add `"custom/d2b-wlcontrol"` to one of your `modules-left` /
 `modules-center` / `modules-right` arrays. The `exec` / `on-click`
-commands assume `nixling-wlcontrol` is installed and on your `PATH`
+commands assume `d2b-wlcontrol` is installed and on your `PATH`
 (see [Install](../README.md#install)).
 
 ## Output contract
@@ -50,10 +50,10 @@ Each line is a single JSON object:
 Generate a starter stylesheet:
 
 ```bash
-nixling-wlcontrol print-css
+d2b-wlcontrol print-css
 ```
 
-The renderer emits these classes on `#custom-nixling-wlcontrol`:
+The renderer emits these classes on `#custom-d2b-wlcontrol`:
 
 | Class | When |
 | --- | --- |
@@ -61,25 +61,25 @@ The renderer emits these classes on `#custom-nixling-wlcontrol`:
 | `partial-running` | Some but not all visible VMs are running. |
 | `all-running` | Every visible VM is running. |
 | `attention` | A VM needs attention (pending restart or unknown state). |
-| `daemon-down` | nixlingd is unreachable. |
+| `daemon-down` | d2bd is unreachable. |
 | `auth-denied` | Reachable but no authorized role. |
 | `stale` | State served from cache after a failed refresh. |
 
-The starter CSS imports nixling's generated GTK color definitions from
-`/etc/nixling/ui-colors.css` and uses the state color names:
+The starter CSS imports d2b's generated GTK color definitions from
+`/etc/d2b/ui-colors.css` and uses the state color names:
 
 | GTK color | Used for |
 | --- | --- |
-| `@nixling_state_running` | `all-running` |
-| `@nixling_state_transitioning` | `partial-running` |
-| `@nixling_state_pendingRestart` | `attention` |
-| `@nixling_state_error` | `daemon-down` |
-| `@nixling_state_denied` | `auth-denied` |
-| `@nixling_state_unknown` | `all-stopped` |
+| `@d2b_state_running` | `all-running` |
+| `@d2b_state_transitioning` | `partial-running` |
+| `@d2b_state_pendingRestart` | `attention` |
+| `@d2b_state_error` | `daemon-down` |
+| `@d2b_state_denied` | `auth-denied` |
+| `@d2b_state_unknown` | `all-stopped` |
 
-The CSS artifact is normally generated at `/etc/nixling/ui-colors.css`.
+The CSS artifact is normally generated at `/etc/d2b/ui-colors.css`.
 It defines those names with GTK `@define-color`, for example
-`@define-color nixling_state_running #a6e3a1;`. The rules only set state
+`@define-color d2b_state_running #a6e3a1;`. The rules only set state
 accent colors so the module inherits your bar's font, padding, and base
 styling.
 
@@ -94,4 +94,4 @@ styling.
 > The loop supports signal-driven refresh (`SIGRTMIN+8`, paired with the
 > module's `"signal": 8`), non-overlapping refresh, daemon-down backoff,
 > and compact/detail display modes (toggle with
-> `nixling-wlcontrol action cycle-display`).
+> `d2b-wlcontrol action cycle-display`).

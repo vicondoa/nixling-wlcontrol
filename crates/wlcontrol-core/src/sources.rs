@@ -1,10 +1,10 @@
 //! Normalized per-call source fragments.
 //!
-//! These are the **output contract of the protocol client** (`wlcontrol-nixling`)
+//! These are the **output contract of the protocol client** (`wlcontrol-d2b`)
 //! and the **input contract of the reducer** ([`crate::reduce`]). Keeping the
-//! dependency direction one-way (`wlcontrol-nixling` → `wlcontrol-core`) means
-//! the reducer never needs to know about nixling wire types: the protocol
-//! client translates raw nixling JSON into these neutral fragments.
+//! dependency direction one-way (`wlcontrol-d2b` → `wlcontrol-core`) means
+//! the reducer never needs to know about d2b wire types: the protocol
+//! client translates raw d2b JSON into these neutral fragments.
 //!
 //! Owning wave: Wave 0 (integrator). Wave 1 agents extend as needed.
 
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{AuthRole, Connectivity, RuntimeState, UsbClaim, VmCapabilities, VmFeatures};
 
-/// One declared VM as reported by `nixling list`.
+/// One declared VM as reported by `d2b list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryVm {
@@ -33,14 +33,14 @@ pub struct InventoryVm {
     pub coarse_status: Option<String>,
 }
 
-/// The declared inventory from `nixling list`.
+/// The declared inventory from `d2b list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Inventory {
     pub vms: Vec<InventoryVm>,
 }
 
-/// Per-VM runtime truth from `nixling status <vm>`.
+/// Per-VM runtime truth from `d2b status <vm>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VmStatus {
@@ -54,14 +54,14 @@ pub struct VmStatus {
     pub capabilities: VmCapabilities,
 }
 
-/// USB claims from `nixling usb probe`.
+/// USB claims from `d2b usb probe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UsbProbe {
     pub claims: Vec<UsbClaim>,
 }
 
-/// Authorization posture from `nixling auth status`.
+/// Authorization posture from `d2b auth status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Auth {

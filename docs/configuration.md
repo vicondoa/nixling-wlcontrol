@@ -1,7 +1,7 @@
 # Configuration
 
-`nixling-wlcontrol` reads TOML from
-`${XDG_CONFIG_HOME:-~/.config}/nixling-wlcontrol/config.toml`. The file
+`d2b-wlcontrol` reads TOML from
+`${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`. The file
 is optional — every setting has a sane default. A present-but-malformed
 file is a hard error (so you notice typos) rather than a silent
 fallback to defaults.
@@ -9,8 +9,8 @@ fallback to defaults.
 ## Example
 
 ```toml
-# Path to the nixlingd public socket.
-public_socket = "/run/nixling/public.sock"
+# Path to the d2bd public socket.
+public_socket = "/run/d2b/public.sock"
 
 # Waybar refresh cadence (ms) and per-operation timeout (ms).
 refresh_interval_ms = 2500
@@ -24,7 +24,7 @@ show_pending_restart = true
 
 [terminal]
 # Guest terminal command as an ARGV VECTOR (never a shell string). wlcontrol
-# runs `nixling vm exec -d <vm> -- ${guest_argv...}`.
+# runs `d2b vm exec -d <vm> -- ${guest_argv...}`.
 guest_argv = ["/run/current-system/sw/bin/foot"]
 
 [observability]
@@ -46,7 +46,7 @@ guest_argv = ["/run/current-system/sw/bin/openterface-run"]
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `public_socket` | string | `/run/nixling/public.sock` | nixlingd public socket path. |
+| `public_socket` | string | `/run/d2b/public.sock` | d2bd public socket path. |
 | `refresh_interval_ms` | integer | `2500` | Waybar poll cadence. |
 | `command_timeout_ms` | integer | `10000` | Per-operation deadline. |
 | `hide_net_vms` | bool | `true` | Hide `sys-*-net` VMs from compact views. |
@@ -62,9 +62,9 @@ guest_argv = ["/run/current-system/sw/bin/openterface-run"]
 
 ## Terminal command is argv, not a shell string
 
-The terminal command is always an **argv vector**. `nixling-wlcontrol`
-spawns the official `nixling` CLI directly (via `execvp`-style process
-spawning) as `nixling vm exec -d <vm> -- ${terminal.guest_argv...}`. There is no
+The terminal command is always an **argv vector**. `d2b-wlcontrol`
+spawns the official `d2b` CLI directly (via `execvp`-style process
+spawning) as `d2b vm exec -d <vm> -- ${terminal.guest_argv...}`. There is no
 shell, so VM names and guest argv elements can never be interpreted as shell
 metacharacters. Use absolute guest paths where possible because guest-control
 exec does not resolve a host shell for you.
@@ -92,5 +92,5 @@ browser.
 
 `[[quick_launch]]` entries add custom icon buttons to the always-visible icon
 row before USB controls. Each entry is VM-scoped and launches a detached guest
-command with `nixling vm exec -d <vm> -- ${guest_argv...}`. `icon` is a Material
+command with `d2b vm exec -d <vm> -- ${guest_argv...}`. `icon` is a Material
 Symbols name and `tooltip` is the hover text.

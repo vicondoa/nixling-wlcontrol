@@ -6,15 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "nixling-wlcontrol command-line entry point (Waybar module, control center, actions)."
+description = "d2b-wlcontrol command-line entry point (Waybar module, control center, actions)."
 
 [[bin]]
-name = "nixling-wlcontrol"
+name = "d2b-wlcontrol"
 path = "src/main.rs"
 
 [dependencies]
 wlcontrol-core.workspace = true
-wlcontrol-nixling.workspace = true
+wlcontrol-d2b.workspace = true
 wlcontrol-waybar = { path = "../wlcontrol-waybar" }
 wlcontrol-ui = { path = "../wlcontrol-ui" }
 clap.workspace = true

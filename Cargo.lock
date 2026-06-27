@@ -544,7 +544,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wlcontrol-core",
- "wlcontrol-nixling",
+ "wlcontrol-d2b",
  "wlcontrol-ui",
  "wlcontrol-waybar",
 ]
@@ -561,7 +561,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wlcontrol-nixling"
+name = "wlcontrol-d2b"
 version = "0.1.0"
 dependencies = [
  "nix",

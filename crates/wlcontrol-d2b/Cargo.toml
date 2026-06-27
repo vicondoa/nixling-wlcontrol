@@ -1,12 +1,12 @@
 [package]
-name = "wlcontrol-nixling"
+name = "wlcontrol-d2b"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Direct nixlingd public-socket client for nixling-wlcontrol."
+description = "Direct d2bd public-socket client for d2b-wlcontrol."
 
 [dependencies]
 wlcontrol-core.workspace = true

@@ -1,5 +1,5 @@
 //! `wlcontrol-core` — the frozen domain contract, configuration, reducer, and
-//! action planner shared by every nixling-wlcontrol surface.
+//! action planner shared by every d2b-wlcontrol surface.
 //!
 //! See [`model`] for the cross-crate contract that downstream fleet agents
 //! build against.

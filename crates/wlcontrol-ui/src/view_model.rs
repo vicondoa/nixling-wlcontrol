@@ -63,14 +63,14 @@ pub(crate) fn state_badge(state: RuntimeState) -> BadgeSpec {
 
 pub(crate) fn unavailable_tooltip(reason: &Unavailable) -> String {
     match reason {
-        Unavailable::DaemonDown => "nixlingd is unreachable".to_owned(),
+        Unavailable::DaemonDown => "d2bd is unreachable".to_owned(),
         Unavailable::InsufficientRole { required } => {
             format!("requires {}", role_name(*required))
         }
         Unavailable::VmState { detail } => detail.clone(),
         Unavailable::UsbOwnedElsewhere { owner } => format!("USB owned by {owner}"),
         Unavailable::NotYetImplemented => {
-            "unsupported by the current nixling audio control plane".to_owned()
+            "unsupported by the current d2b audio control plane".to_owned()
         }
         Unavailable::Blocked { detail } => detail.clone(),
     }
@@ -204,7 +204,7 @@ pub(crate) fn usb_claim_summary(claim: &UsbClaim) -> String {
 
 pub(crate) fn empty_group_message(show_internal: bool) -> &'static str {
     if show_internal {
-        "No VMs were reported by nixlingd."
+        "No VMs were reported by d2bd."
     } else {
         "No visible VMs. Enable “Internal” to show hidden and net VMs."
     }
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn maps_unavailable_to_human_tooltips() {
         let cases = [
-            (Unavailable::DaemonDown, "nixlingd"),
+            (Unavailable::DaemonDown, "d2bd"),
             (
                 Unavailable::InsufficientRole {
                     required: AuthRole::Admin,

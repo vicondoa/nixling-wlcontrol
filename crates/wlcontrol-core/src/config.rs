@@ -1,4 +1,4 @@
-//! User configuration for nixling-wlcontrol.
+//! User configuration for d2b-wlcontrol.
 //!
 //! Owning wave: **Wave 1 — Core model agent**. Wave 0 ships a minimal,
 //! compiling skeleton with sane defaults and the on-disk location contract.
@@ -11,22 +11,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{WlError, WlResult};
 
-/// Default config file location: `${XDG_CONFIG_HOME:-~/.config}/nixling-wlcontrol/config.toml`.
-pub const CONFIG_RELATIVE_PATH: &str = "nixling-wlcontrol/config.toml";
-pub const DEFAULT_COLOR_ARTIFACT_PATH: &str = "/etc/nixling/ui-colors.json";
+/// Default config file location: `${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`.
+pub const CONFIG_RELATIVE_PATH: &str = "d2b-wlcontrol/config.toml";
+pub const DEFAULT_COLOR_ARTIFACT_PATH: &str = "/etc/d2b/ui-colors.json";
 
 const PRIVILEGED_BROKER_SOCKET_MESSAGE: &str =
-    "refusing to use the privileged broker socket; nixling-wlcontrol speaks only the public socket";
+    "refusing to use the privileged broker socket; d2b-wlcontrol speaks only the public socket";
 const UI_COLOR_ARTIFACT_VERSION: u8 = 1;
 
-/// Returns true when `path` is acceptable as a nixling public-socket path.
+/// Returns true when `path` is acceptable as a d2b public-socket path.
 ///
 /// This intentionally rejects the privileged broker socket by both its exact
 /// canonical path and by basename so downstream protocol clients can share the
 /// same fail-closed guard before connecting.
 pub fn is_public_socket_path(path: &str) -> bool {
     let path = path.trim();
-    if path.is_empty() || path == "/run/nixling/priv.sock" {
+    if path.is_empty() || path == "/run/d2b/priv.sock" {
         return false;
     }
 
@@ -37,7 +37,7 @@ pub fn is_public_socket_path(path: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
 pub struct Config {
-    /// Path to the nixling public socket.
+    /// Path to the d2b public socket.
     pub public_socket: String,
     /// Refresh cadence in milliseconds for the Waybar loop.
     pub refresh_interval_ms: u64,
@@ -60,7 +60,7 @@ pub struct Config {
     pub observability: ObservabilityConfig,
     /// Per-VM custom guest quick-launch icons.
     pub quick_launch: Vec<QuickLaunchConfig>,
-    /// Path to nixling's resolved UI color JSON artifact.
+    /// Path to d2b's resolved UI color JSON artifact.
     pub color_artifact_path: String,
 }
 
@@ -163,7 +163,7 @@ pub struct ObservabilityConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
 pub struct QuickLaunchConfig {
-    /// Stable action id used by `nixling-wlcontrol action quick-launch`.
+    /// Stable action id used by `d2b-wlcontrol action quick-launch`.
     pub id: String,
     /// VM this icon appears on.
     pub vm: String,
@@ -171,14 +171,14 @@ pub struct QuickLaunchConfig {
     pub icon: String,
     /// Hover text shown in the popup.
     pub tooltip: String,
-    /// Guest argv launched with `nixling vm exec -d <vm> -- ...`.
+    /// Guest argv launched with `d2b vm exec -d <vm> -- ...`.
     pub guest_argv: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            public_socket: "/run/nixling/public.sock".to_owned(),
+            public_socket: "/run/d2b/public.sock".to_owned(),
             refresh_interval_ms: 2500,
             command_timeout_ms: 10000,
             hide_net_vms: true,
@@ -310,7 +310,7 @@ pub fn load_ui_colors_from_path(path: &Path) -> UiColorLoad {
                 colors: fallback(),
                 degraded: Some(UiColorDegraded {
                     reason: UiColorFallbackReason::Missing,
-                    message: "UI color artifact is missing; verify nixling.site.ui configuration"
+                    message: "UI color artifact is missing; verify d2b.site.ui configuration"
                         .to_owned(),
                 }),
             };
@@ -330,7 +330,7 @@ pub fn load_ui_colors_from_path(path: &Path) -> UiColorLoad {
                 degraded: Some(UiColorDegraded {
                     reason: UiColorFallbackReason::Malformed,
                     message:
-                        "UI color artifact could not be read; verify nixling UI color configuration"
+                        "UI color artifact could not be read; verify d2b UI color configuration"
                             .to_owned(),
                 }),
             };
@@ -345,9 +345,8 @@ pub fn load_ui_colors_from_path(path: &Path) -> UiColorLoad {
                 colors: fallback(),
                 degraded: Some(UiColorDegraded {
                     reason: UiColorFallbackReason::Malformed,
-                    message:
-                        "UI color artifact is malformed; verify nixling UI color configuration"
-                            .to_owned(),
+                    message: "UI color artifact is malformed; verify d2b UI color configuration"
+                        .to_owned(),
                 }),
             };
         }
@@ -468,7 +467,7 @@ mod tests {
     #[test]
     fn default_config_is_sane() {
         let c = Config::default();
-        assert_eq!(c.public_socket, "/run/nixling/public.sock");
+        assert_eq!(c.public_socket, "/run/d2b/public.sock");
         assert_eq!(c.color_artifact_path, DEFAULT_COLOR_ARTIFACT_PATH);
         assert!(c.hide_net_vms);
         assert!(c.favorites.is_empty());
@@ -508,11 +507,11 @@ hidden_vms = ["noisy-vm"]
     fn parses_color_artifact_path() {
         let c = Config::from_toml(
             r#"
-color_artifact_path = "/tmp/nixling-ui-colors.json"
+color_artifact_path = "/tmp/d2b-ui-colors.json"
 "#,
         )
         .expect("parse config");
-        assert_eq!(c.color_artifact_path, "/tmp/nixling-ui-colors.json");
+        assert_eq!(c.color_artifact_path, "/tmp/d2b-ui-colors.json");
     }
 
     #[test]
@@ -524,15 +523,14 @@ color_artifact_path = "/tmp/nixling-ui-colors.json"
 
     #[test]
     fn default_missing_color_artifact_uses_non_degraded_fallback() {
-        let load = load_ui_colors_from_path(Path::new("/etc/nixling/ui-colors.json"));
+        let load = load_ui_colors_from_path(Path::new("/etc/d2b/ui-colors.json"));
         assert!(load.degraded.is_none());
         assert_eq!(load.colors.states.running, "#a6e3a1");
     }
 
     #[test]
     fn configured_missing_color_artifact_is_degraded() {
-        let load =
-            load_ui_colors_from_path(Path::new("/tmp/nixling-wlcontrol-missing-colors.json"));
+        let load = load_ui_colors_from_path(Path::new("/tmp/d2b-wlcontrol-missing-colors.json"));
         assert_eq!(
             load.degraded.as_ref().map(|d| d.reason),
             Some(UiColorFallbackReason::Missing)
@@ -542,8 +540,7 @@ color_artifact_path = "/tmp/nixling-ui-colors.json"
 
     #[test]
     fn malformed_color_artifact_is_degraded() {
-        let dir =
-            std::env::temp_dir().join(format!("nixling-wlcontrol-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("d2b-wlcontrol-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let path = dir.join("ui-colors.json");
         std::fs::write(&path, "{not json").expect("write malformed");
@@ -558,8 +555,7 @@ color_artifact_path = "/tmp/nixling-ui-colors.json"
 
     #[test]
     fn valid_color_artifact_loads() {
-        let dir =
-            std::env::temp_dir().join(format!("nixling-wlcontrol-valid-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("d2b-wlcontrol-valid-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let path = dir.join("ui-colors.json");
         std::fs::write(
@@ -704,10 +700,10 @@ browser_argv = []
     #[test]
     fn rejects_privileged_broker_socket_paths() {
         for public_socket in [
-            "/run/nixling/priv.sock",
+            "/run/d2b/priv.sock",
             "/run/other/priv.sock",
             "priv.sock",
-            "  /run/nixling/priv.sock  ",
+            "  /run/d2b/priv.sock  ",
         ] {
             assert!(!is_public_socket_path(public_socket));
             let err = Config::from_toml(&format!("public_socket = \"{public_socket}\""))
@@ -732,8 +728,8 @@ browser_argv = []
 
     #[test]
     fn accepts_public_socket_path() {
-        assert!(is_public_socket_path("/run/nixling/public.sock"));
-        Config::from_toml("public_socket = \"/run/nixling/public.sock\"")
+        assert!(is_public_socket_path("/run/d2b/public.sock"));
+        Config::from_toml("public_socket = \"/run/d2b/public.sock\"")
             .expect("public socket path should validate");
     }
 }

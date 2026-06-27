@@ -1,44 +1,44 @@
-/* nixling-wlcontrol — starter Waybar style.
+/* d2b-wlcontrol — starter Waybar style.
  *
  * These rules intentionally only set state-driven accents so the module
  * inherits your bar's font, padding, and base colors. Override freely.
  *
- * Classes emitted by `nixling-wlcontrol waybar`:
+ * Classes emitted by `d2b-wlcontrol waybar`:
  *   all-stopped | partial-running | all-running | attention
  *   daemon-down | auth-denied | stale
  */
 
-@import url("/etc/nixling/ui-colors.css");
+@import url("/etc/d2b/ui-colors.css");
 
-#custom-nixling-wlcontrol {
+#custom-d2b-wlcontrol {
   padding: 0 8px;
 }
 
-#custom-nixling-wlcontrol.all-stopped {
-  color: @nixling_state_unknown;
+#custom-d2b-wlcontrol.all-stopped {
+  color: @d2b_state_unknown;
   opacity: 0.7;
 }
 
-#custom-nixling-wlcontrol.all-running {
-  color: @nixling_state_running;
+#custom-d2b-wlcontrol.all-running {
+  color: @d2b_state_running;
 }
 
-#custom-nixling-wlcontrol.partial-running {
-  color: @nixling_state_transitioning;
+#custom-d2b-wlcontrol.partial-running {
+  color: @d2b_state_transitioning;
 }
 
-#custom-nixling-wlcontrol.attention {
-  color: @nixling_state_pendingRestart;
+#custom-d2b-wlcontrol.attention {
+  color: @d2b_state_pendingRestart;
 }
 
-#custom-nixling-wlcontrol.daemon-down {
-  color: @nixling_state_error;
+#custom-d2b-wlcontrol.daemon-down {
+  color: @d2b_state_error;
 }
 
-#custom-nixling-wlcontrol.auth-denied {
-  color: @nixling_state_denied;
+#custom-d2b-wlcontrol.auth-denied {
+  color: @d2b_state_denied;
 }
 
-#custom-nixling-wlcontrol.stale {
+#custom-d2b-wlcontrol.stale {
   opacity: 0.6;
 }

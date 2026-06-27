@@ -1,4 +1,4 @@
-//! Wire framing primitives for the nixlingd public socket.
+//! Wire framing primitives for the d2bd public socket.
 //!
 //! The public protocol frames every message as a 4-byte little-endian unsigned
 //! length prefix followed by one UTF-8 JSON document, with a 1 MiB cap

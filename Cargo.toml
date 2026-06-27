@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/wlcontrol-core",
-    "crates/wlcontrol-nixling",
+    "crates/wlcontrol-d2b",
     "crates/wlcontrol-waybar",
     "crates/wlcontrol-ui",
     "crates/wlcontrol-cli",
@@ -13,13 +13,13 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.94"
 license = "Apache-2.0"
-repository = "https://github.com/vicondoa/nixling-wlcontrol"
+repository = "https://github.com/vicondoa/d2b-wlcontrol"
 authors = ["vicondoa"]
 
 [workspace.dependencies]
 # Internal crates
 wlcontrol-core = { path = "crates/wlcontrol-core" }
-wlcontrol-nixling = { path = "crates/wlcontrol-nixling" }
+wlcontrol-d2b = { path = "crates/wlcontrol-d2b" }
 
 # Shared third-party dependencies. Versions are pinned at the workspace
 # level so every crate speaks the same serde / error surface.

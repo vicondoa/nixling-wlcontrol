@@ -1,5 +1,5 @@
 {
-  description = "nixling-wlcontrol — clean Waybar indicator and control center for nixling VMs";
+  description = "d2b-wlcontrol — clean Waybar indicator and control center for d2b VMs";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -26,7 +26,7 @@
         in
         {
           default = pkgs.rustPlatform.buildRustPackage {
-            pname = "nixling-wlcontrol";
+            pname = "d2b-wlcontrol";
             version = "0.1.0";
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
@@ -40,15 +40,15 @@
             ];
 
             postInstall = ''
-              wrapProgram "$out/bin/nixling-wlcontrol" \
+              wrapProgram "$out/bin/d2b-wlcontrol" \
                 --prefix PATH : ${pkgs.lib.makeBinPath (runtimeBins pkgs)} \
                 --prefix XDG_DATA_DIRS : ${pkgs.lib.makeSearchPath "share" (runtimeFonts pkgs)}
             '';
 
             meta = with pkgs.lib; {
-              description = "Waybar indicator and control center for nixling microVMs";
+              description = "Waybar indicator and control center for d2b microVMs";
               license = licenses.asl20;
-              mainProgram = "nixling-wlcontrol";
+              mainProgram = "d2b-wlcontrol";
               platforms = systems;
             };
           };
@@ -58,7 +58,7 @@
       apps = forAllSystems (system: {
         default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/nixling-wlcontrol";
+          program = "${self.packages.${system}.default}/bin/d2b-wlcontrol";
         };
       });
 

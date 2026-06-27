@@ -20,13 +20,13 @@ use wlcontrol_core::{
     model::{AuthRole, Connectivity, RuntimeState, SocketIntent},
     Config, WlError,
 };
-use wlcontrol_nixling::{wire, NixlingClient};
+use wlcontrol_d2b::{wire, D2bClient};
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn refresh_populates_reduce_input_from_public_socket() {
-    let server = FakeNixlingd::start(FakeMode::Refresh);
+    let server = FakeD2bd::start(FakeMode::Refresh);
     let client = client_for(server.path());
 
     let input = client.refresh();
@@ -58,7 +58,7 @@ fn refresh_populates_reduce_input_from_public_socket() {
 
 #[test]
 fn version_mismatch_rejection_is_protocol_error() {
-    let server = FakeNixlingd::start(FakeMode::RejectHello);
+    let server = FakeD2bd::start(FakeMode::RejectHello);
     let client = client_for(server.path());
 
     let error = client.dispatch(&SocketIntent::List).expect_err("rejects");
@@ -83,8 +83,8 @@ fn absent_socket_reports_daemon_down() {
 
 #[test]
 fn broker_socket_guard_rejects_priv_sock_before_connect() {
-    let client = NixlingClient::new(&Config {
-        public_socket: "/run/nixling/priv.sock".to_owned(),
+    let client = D2bClient::new(&Config {
+        public_socket: "/run/d2b/priv.sock".to_owned(),
         command_timeout_ms: 100,
         ..Default::default()
     });
@@ -92,14 +92,14 @@ fn broker_socket_guard_rejects_priv_sock_before_connect() {
     let error = client.dispatch(&SocketIntent::List).expect_err("guarded");
 
     assert!(
-        matches!(error, WlError::Config(ref message) if message.contains("privileged nixling broker socket")),
+        matches!(error, WlError::Config(ref message) if message.contains("privileged d2b broker socket")),
         "expected config guard error, got {error:?}"
     );
 }
 
 #[test]
 fn vm_start_dispatch_returns_applied_summary() {
-    let server = FakeNixlingd::start(FakeMode::VmStartOk);
+    let server = FakeD2bd::start(FakeMode::VmStartOk);
     let client = client_for(server.path());
 
     let outcome = client
@@ -114,7 +114,7 @@ fn vm_start_dispatch_returns_applied_summary() {
 
 #[test]
 fn vm_restart_dispatch_uses_no_wait_api() {
-    let server = FakeNixlingd::start(FakeMode::VmRestartOk);
+    let server = FakeD2bd::start(FakeMode::VmRestartOk);
     let client = client_for(server.path());
 
     let outcome = client
@@ -129,7 +129,7 @@ fn vm_restart_dispatch_uses_no_wait_api() {
 
 #[test]
 fn vm_stop_dispatch_omits_force_by_default() {
-    let server = FakeNixlingd::start(FakeMode::VmStopOk);
+    let server = FakeD2bd::start(FakeMode::VmStopOk);
     let client = client_for(server.path());
 
     let outcome = client
@@ -145,7 +145,7 @@ fn vm_stop_dispatch_omits_force_by_default() {
 
 #[test]
 fn force_vm_stop_dispatch_sends_force_true() {
-    let server = FakeNixlingd::start(FakeMode::VmForceStopOk);
+    let server = FakeD2bd::start(FakeMode::VmForceStopOk);
     let client = client_for(server.path());
 
     let outcome = client
@@ -161,7 +161,7 @@ fn force_vm_stop_dispatch_sends_force_true() {
 
 #[test]
 fn boot_dispatch_returns_applied_summary() {
-    let server = FakeNixlingd::start(FakeMode::BootOk);
+    let server = FakeD2bd::start(FakeMode::BootOk);
     let client = client_for(server.path());
 
     let outcome = client
@@ -179,7 +179,7 @@ fn mutating_non_applied_outcomes_map_to_typed_errors() {
     let cases = [
         (
             FakeMode::MutatingDryRunPlanned,
-            ExpectedError::Nixling,
+            ExpectedError::D2b,
             ["dry-run-planned", "planned only", "use --apply"],
         ),
         (
@@ -189,12 +189,12 @@ fn mutating_non_applied_outcomes_map_to_typed_errors() {
         ),
         (
             FakeMode::MutatingNotYetImplemented,
-            ExpectedError::Nixling,
-            ["not-yet-implemented", "not implemented", "upgrade nixling"],
+            ExpectedError::D2b,
+            ["not-yet-implemented", "not implemented", "upgrade d2b"],
         ),
         (
             FakeMode::MutatingBrokerError,
-            ExpectedError::Nixling,
+            ExpectedError::D2b,
             ["broker-error", "broker refused", "inspect daemon logs"],
         ),
         (
@@ -205,7 +205,7 @@ fn mutating_non_applied_outcomes_map_to_typed_errors() {
     ];
 
     for (mode, expected, needles) in cases {
-        let server = FakeNixlingd::start(mode);
+        let server = FakeD2bd::start(mode);
         let client = client_for(server.path());
 
         let error = client
@@ -228,20 +228,20 @@ fn mutating_non_applied_outcomes_map_to_typed_errors() {
 
 #[test]
 fn usb_probe_mutating_response_maps_to_wl_error() {
-    let server = FakeNixlingd::start(FakeMode::UsbProbeBrokerError);
+    let server = FakeD2bd::start(FakeMode::UsbProbeBrokerError);
     let client = client_for(server.path());
 
     let error = client
         .dispatch(&SocketIntent::UsbProbe)
         .expect_err("usb probe broker error");
 
-    assert!(matches!(error, WlError::Nixling(ref message) if message.contains("broker refused")));
+    assert!(matches!(error, WlError::D2b(ref message) if message.contains("broker refused")));
     server.join();
 }
 
 #[test]
 fn accept_then_stall_degrades_refresh_and_times_out_dispatch() {
-    let server = FakeNixlingd::start(FakeMode::AcceptThenStall);
+    let server = FakeD2bd::start(FakeMode::AcceptThenStall);
     let client = client_for_timeout(server.path(), 100);
 
     let input = client.refresh();
@@ -249,7 +249,7 @@ fn accept_then_stall_degrades_refresh_and_times_out_dispatch() {
     assert_degraded_refresh(&input);
     server.join();
 
-    let server = FakeNixlingd::start(FakeMode::AcceptThenStall);
+    let server = FakeD2bd::start(FakeMode::AcceptThenStall);
     let client = client_for_timeout(server.path(), 100);
 
     let error = client.dispatch(&SocketIntent::List).expect_err("timeout");
@@ -263,7 +263,7 @@ fn accept_then_stall_degrades_refresh_and_times_out_dispatch() {
 
 #[test]
 fn close_after_hello_degrades_refresh_and_reports_daemon_down() {
-    let server = FakeNixlingd::start(FakeMode::CloseAfterHello);
+    let server = FakeD2bd::start(FakeMode::CloseAfterHello);
     let client = client_for_timeout(server.path(), 100);
 
     let input = client.refresh();
@@ -271,7 +271,7 @@ fn close_after_hello_degrades_refresh_and_reports_daemon_down() {
     assert_degraded_refresh(&input);
     server.join();
 
-    let server = FakeNixlingd::start(FakeMode::CloseAfterHello);
+    let server = FakeD2bd::start(FakeMode::CloseAfterHello);
     let client = client_for_timeout(server.path(), 100);
 
     let error = client.dispatch(&SocketIntent::List).expect_err("closed");
@@ -289,7 +289,7 @@ fn post_auth_request_failure_degrades_refresh_not_false_healthy() {
     // fails on a closed connection. refresh() MUST degrade to daemon-down
     // rather than returning a false-healthy "Connected with zero VMs"
     // snapshot built from the successful auth alone.
-    let server = FakeNixlingd::start(FakeMode::RefreshAuthThenClose);
+    let server = FakeD2bd::start(FakeMode::RefreshAuthThenClose);
     let client = client_for_timeout(server.path(), 100);
 
     let input = client.refresh();
@@ -300,7 +300,7 @@ fn post_auth_request_failure_degrades_refresh_not_false_healthy() {
 
 #[test]
 fn invalid_json_degrades_refresh_and_is_protocol_error_on_dispatch() {
-    let server = FakeNixlingd::start(FakeMode::InvalidJson);
+    let server = FakeD2bd::start(FakeMode::InvalidJson);
     let client = client_for_timeout(server.path(), 100);
 
     let input = client.refresh();
@@ -308,7 +308,7 @@ fn invalid_json_degrades_refresh_and_is_protocol_error_on_dispatch() {
     assert_degraded_refresh(&input);
     server.join();
 
-    let server = FakeNixlingd::start(FakeMode::InvalidJson);
+    let server = FakeD2bd::start(FakeMode::InvalidJson);
     let client = client_for_timeout(server.path(), 100);
 
     let error = client
@@ -325,7 +325,7 @@ fn invalid_json_degrades_refresh_and_is_protocol_error_on_dispatch() {
 #[test]
 fn malformed_frames_degrade_refresh_and_are_protocol_errors_on_dispatch() {
     for mode in [FakeMode::LengthMismatchFrame, FakeMode::OversizedFrame] {
-        let server = FakeNixlingd::start(mode);
+        let server = FakeD2bd::start(mode);
         let client = client_for_timeout(server.path(), 100);
 
         let input = client.refresh();
@@ -333,7 +333,7 @@ fn malformed_frames_degrade_refresh_and_are_protocol_errors_on_dispatch() {
         assert_degraded_refresh(&input);
         server.join();
 
-        let server = FakeNixlingd::start(mode);
+        let server = FakeD2bd::start(mode);
         let client = client_for_timeout(server.path(), 100);
 
         let error = client.dispatch(&SocketIntent::List).expect_err("bad frame");
@@ -353,7 +353,7 @@ fn malformed_frame_server_tolerates_client_closing_after_hello() {
         FakeMode::LengthMismatchFrame,
         FakeMode::OversizedFrame,
     ] {
-        let server = FakeNixlingd::start(mode);
+        let server = FakeD2bd::start(mode);
         send_hello_then_close(server.path());
         server.join();
     }
@@ -361,7 +361,7 @@ fn malformed_frame_server_tolerates_client_closing_after_hello() {
 
 #[derive(Clone, Copy, Debug)]
 enum ExpectedError {
-    Nixling,
+    D2b,
     Protocol,
     Timeout,
 }
@@ -369,9 +369,9 @@ enum ExpectedError {
 impl ExpectedError {
     fn assert_matches(self, error: &WlError) {
         match self {
-            Self::Nixling => assert!(
-                matches!(error, WlError::Nixling(_)),
-                "expected nixling error, got {error:?}"
+            Self::D2b => assert!(
+                matches!(error, WlError::D2b(_)),
+                "expected d2b error, got {error:?}"
             ),
             Self::Protocol => assert!(
                 matches!(error, WlError::Protocol(_)),
@@ -420,12 +420,12 @@ impl FakeMode {
     }
 }
 
-struct FakeNixlingd {
+struct FakeD2bd {
     path: PathBuf,
     handle: thread::JoinHandle<()>,
 }
 
-impl FakeNixlingd {
+impl FakeD2bd {
     fn start(mode: FakeMode) -> Self {
         let path = unique_socket_path();
         let _ = fs::remove_file(&path);
@@ -450,7 +450,7 @@ impl FakeNixlingd {
 
     fn join(self) {
         let Self { path, handle } = self;
-        handle.join().expect("fake nixlingd thread");
+        handle.join().expect("fake d2bd thread");
         cleanup_socket_path(&path);
     }
 }
@@ -673,7 +673,7 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                         "vm": "corp-vm",
                         "env": "work",
                         "busId": "1-2",
-                        "lockPath": "/run/nixling/usbip/corp-vm-1-2.lock",
+                        "lockPath": "/run/d2b/usbip/corp-vm-1-2.lock",
                         "status": "bound",
                         "ownerVm": "corp-vm"
                     }]
@@ -686,7 +686,7 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                 "vm": "corp-vm",
                 "env": "work",
                 "busId": "1-2",
-                "lockPath": "/run/nixling/usbip/corp-vm-1-2.lock",
+                "lockPath": "/run/d2b/usbip/corp-vm-1-2.lock",
                 "status": "bound",
                 "ownerVm": "corp-vm"
             }]
@@ -709,7 +709,7 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
             mutating_response("api-ready-timeout", "api not ready", "inspect guest")
         }
         (FakeMode::MutatingNotYetImplemented, "vmStart") => {
-            mutating_response("not-yet-implemented", "not implemented", "upgrade nixling")
+            mutating_response("not-yet-implemented", "not implemented", "upgrade d2b")
         }
         (FakeMode::MutatingBrokerError, "vmStart") => {
             mutating_response("broker-error", "broker refused", "inspect daemon logs")
@@ -812,12 +812,12 @@ fn assert_degraded_refresh(input: &wlcontrol_core::sources::ReduceInput) {
     assert!(input.usb.is_none());
 }
 
-fn client_for(path: &Path) -> NixlingClient {
+fn client_for(path: &Path) -> D2bClient {
     client_for_timeout(path, 1000)
 }
 
-fn client_for_timeout(path: &Path, command_timeout_ms: u64) -> NixlingClient {
-    NixlingClient::new(&Config {
+fn client_for_timeout(path: &Path, command_timeout_ms: u64) -> D2bClient {
+    D2bClient::new(&Config {
         public_socket: path.display().to_string(),
         command_timeout_ms,
         ..Default::default()

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Waybar custom-module renderer for nixling-wlcontrol."
+description = "Waybar custom-module renderer for d2b-wlcontrol."
 
 [dependencies]
 wlcontrol-core.workspace = true

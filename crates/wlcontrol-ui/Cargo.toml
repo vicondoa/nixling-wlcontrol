@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Quickshell layer-shell frontend launcher for nixling-wlcontrol."
+description = "Quickshell layer-shell frontend launcher for d2b-wlcontrol."
 
 [dependencies]
 wlcontrol-core.workspace = true

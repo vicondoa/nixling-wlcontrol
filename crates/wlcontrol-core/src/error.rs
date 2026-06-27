@@ -1,4 +1,4 @@
-//! Error types shared across nixling-wlcontrol.
+//! Error types shared across d2b-wlcontrol.
 
 use thiserror::Error;
 
@@ -8,17 +8,17 @@ use thiserror::Error;
 /// agents may add variants as needed without renaming existing ones.
 #[derive(Debug, Error)]
 pub enum WlError {
-    /// `nixlingd` could not be reached on the public socket.
-    #[error("nixlingd is unreachable: {0}")]
+    /// `d2bd` could not be reached on the public socket.
+    #[error("d2bd is unreachable: {0}")]
     DaemonDown(String),
 
     /// The public-socket peer rejected the handshake or denied the request.
-    #[error("nixlingd denied the request: {0}")]
+    #[error("d2bd denied the request: {0}")]
     Denied(String),
 
-    /// A nixling operation returned a typed error envelope.
-    #[error("nixling error: {0}")]
-    Nixling(String),
+    /// A d2b operation returned a typed error envelope.
+    #[error("d2b error: {0}")]
+    D2b(String),
 
     /// Local configuration could not be loaded or parsed.
     #[error("configuration error: {0}")]

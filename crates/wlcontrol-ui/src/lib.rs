@@ -1,6 +1,6 @@
 //! Quickshell/QML layer-shell frontend launcher.
 //!
-//! `nixling-wlcontrol` is a Waybar-adjacent desktop shell widget, not a
+//! `d2b-wlcontrol` is a Waybar-adjacent desktop shell widget, not a
 //! document-style application. The visible frontend is therefore a Quickshell
 //! layer-shell popup with explicit Waybar/Catppuccin colours, while Rust remains
 //! the backend (`status-json` + `action …`) and the safe process launcher.
@@ -68,11 +68,11 @@ pub fn open(config: &Config) -> WlResult<()> {
         .arg("--path")
         .arg(&qml_path)
         .arg("--no-duplicate")
-        .env("NIXLING_WLCONTROL_BIN", backend)
-        .env("NIXLING_WLCONTROL_THEME_JSON", theme_json)
-        .env("NIXLING_WLCONTROL_THEME_DEGRADED", theme_degraded)
+        .env("D2B_WLCONTROL_BIN", backend)
+        .env("D2B_WLCONTROL_THEME_JSON", theme_json)
+        .env("D2B_WLCONTROL_THEME_DEGRADED", theme_degraded)
         .env(
-            "NIXLING_WLCONTROL_OBSERVABILITY_ENABLED",
+            "D2B_WLCONTROL_OBSERVABILITY_ENABLED",
             if config.observability.enabled && config.observability.url.is_some() {
                 "1"
             } else {
@@ -80,7 +80,7 @@ pub fn open(config: &Config) -> WlResult<()> {
             },
         )
         .env(
-            "NIXLING_WLCONTROL_OBSERVABILITY_SUCCESS",
+            "D2B_WLCONTROL_OBSERVABILITY_SUCCESS",
             &config.observability.success_message,
         )
         .stdin(Stdio::null())
@@ -115,7 +115,7 @@ fn runtime_dir() -> WlResult<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| env::var_os("TMPDIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    Ok(base.join("nixling-wlcontrol").join("quickshell"))
+    Ok(base.join("d2b-wlcontrol").join("quickshell"))
 }
 
 fn materialize_qml(dir: &Path) -> WlResult<PathBuf> {
@@ -209,11 +209,11 @@ fn cmdline_matches_quickshell(pid: u32, runtime_dir: &Path) -> bool {
 ///
 /// Notes:
 /// - Uses argv-vector `Process` commands; no shell strings.
-/// - Colours prefer nixling color artifact data and fall back to visible
+/// - Colours prefer d2b color artifact data and fall back to visible
 ///   Catppuccin/Waybar-style tokens.
 /// - The panel is a draggable layer-shell overlay anchored near the top-right.
 const QML_SOURCE: &str = r##"
-//@ pragma StateDir $XDG_STATE_HOME/nixling-wlcontrol/quickshell
+//@ pragma StateDir $XDG_STATE_HOME/d2b-wlcontrol/quickshell
 //@ pragma IconTheme Adwaita
 
 import QtQuick
@@ -223,7 +223,7 @@ import Quickshell.Io
 ShellRoot {
   id: root
 
-  property string backend: Quickshell.env("NIXLING_WLCONTROL_BIN") || "nixling-wlcontrol"
+  property string backend: Quickshell.env("D2B_WLCONTROL_BIN") || "d2b-wlcontrol"
   property var state: ({ connectivity: "daemon-down", role: "none", vms: [] })
   property var usbDevices: []
   property bool busy: false
@@ -236,9 +236,9 @@ ShellRoot {
   property string confirmKey: ""
   property int normalConfirmMs: 2200
   property int forceConfirmMs: 5200
-  property bool observabilityEnabled: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
-  property string observabilitySuccess: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
-  property string themeDegraded: Quickshell.env("NIXLING_WLCONTROL_THEME_DEGRADED") || ""
+  property bool observabilityEnabled: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
+  property string observabilitySuccess: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
+  property string themeDegraded: Quickshell.env("D2B_WLCONTROL_THEME_DEGRADED") || ""
   property var fallbackStateColors: ({
     running: "#a6e3a1",
     transitioning: "#f9e2af",
@@ -248,9 +248,9 @@ ShellRoot {
     unknown: "#6c7086"
   })
   property string fallbackHostAccent: "#89b4fa"
-  property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_THEME_JSON"))
-  property var stateColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_STATE_COLORS"))
-  property var envColorsEnv: root.parseJsonObject(Quickshell.env("NIXLING_WLCONTROL_ENV_COLORS"))
+  property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_THEME_JSON"))
+  property var stateColorsEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_STATE_COLORS"))
+  property var envColorsEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_ENV_COLORS"))
 
   function visibleVms() {
     const vms = state.vms || []
@@ -306,7 +306,7 @@ ShellRoot {
 
   function hostAccentColor() {
     const host = themeSection("host")
-    return colorOr(host.accent, colorOr(Quickshell.env("NIXLING_WLCONTROL_HOST_ACCENT"), fallbackHostAccent))
+    return colorOr(host.accent, colorOr(Quickshell.env("D2B_WLCONTROL_HOST_ACCENT"), fallbackHostAccent))
   }
 
   function envAccentColor(env) {
@@ -422,7 +422,7 @@ ShellRoot {
 
   function forceStopDisabledReason(vm) {
     if (state.connectivity !== "connected" || state.role !== "admin" || vm.state !== "running" || busy) return root.disabledReason(vm, "admin", "stop")
-    if (!supportsCapability(vm, "forceStop")) return "Force shutdown is waiting for nixling force-stop support"
+    if (!supportsCapability(vm, "forceStop")) return "Force shutdown is waiting for d2b force-stop support"
     return root.disabledReason(vm, "admin", "stop")
   }
 
@@ -532,7 +532,7 @@ ShellRoot {
 
   function disabledReason(vm, role, capability) {
     if (vm && capability && !hasCapability(vm, capability)) return "Unsupported by this VM runtime"
-    if (state.connectivity !== "connected") return state.connectivity === "auth-denied" ? "Authorization denied" : "nixlingd is unreachable"
+    if (state.connectivity !== "connected") return state.connectivity === "auth-denied" ? "Authorization denied" : "d2bd is unreachable"
     if (role === "admin" && state.role !== "admin") return "Requires admin role"
     if (state.role === "none") return "Requires launcher role"
     if (vm && vm.state !== "running") return "VM must be running"
@@ -728,7 +728,7 @@ ShellRoot {
               font.pixelSize: 16
               font.bold: true
               horizontalAlignment: Text.AlignHCenter
-              text: "nixling"
+              text: "d2b"
             }
 
             Row {
@@ -832,7 +832,7 @@ ShellRoot {
                   property bool usbEntryVisible: false
                   property string usbEntryText: ""
 
-                  // Left accent border follows the nixling env color contract.
+                  // Left accent border follows the d2b env color contract.
                   Rectangle {
                     id: leftAccent
                     width: 4
@@ -1194,9 +1194,9 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("root.canAdvanced(vm, \"switch\")"));
         assert!(QML_SOURCE.contains("root.hasCapability(vm, \"usbHotplug\")"));
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
-        assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED"));
-        assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_THEME_JSON"));
-        assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_STATE_COLORS"));
+        assert!(QML_SOURCE.contains("D2B_WLCONTROL_OBSERVABILITY_ENABLED"));
+        assert!(QML_SOURCE.contains("D2B_WLCONTROL_THEME_JSON"));
+        assert!(QML_SOURCE.contains("D2B_WLCONTROL_STATE_COLORS"));
         assert!(QML_SOURCE.contains("function stateColor(name)"));
         assert!(QML_SOURCE.contains("border.color: root.envAccentColor(vm.env)"));
         assert!(!QML_SOURCE.contains("vmBorderColor"));
@@ -1208,7 +1208,7 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("function confirmForceStop(vm)"));
         assert!(QML_SOURCE.contains("[\"force-stop\", vm.name]"));
         assert!(QML_SOURCE.contains("Danger: click Force shutdown again"));
-        assert!(QML_SOURCE.contains("Force shutdown is waiting for nixling force-stop support"));
+        assert!(QML_SOURCE.contains("Force shutdown is waiting for d2b force-stop support"));
         assert!(QML_SOURCE.contains("Requesting graceful stop"));
         assert!(QML_SOURCE.contains("skipping graceful guest shutdown"));
         let primary_start = QML_SOURCE

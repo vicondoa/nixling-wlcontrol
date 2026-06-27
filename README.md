@@ -1,20 +1,20 @@
-# nixling-wlcontrol
+# d2b-wlcontrol
 
 A clean, Waybar-styled indicator and control center for
-[nixling](https://github.com/vicondoa/nixling) microVMs, built for a
-niri / Wayland desktop.
+[d2b: Double Dutch Bus](https://github.com/vicondoa/d2b), built for a
+niri / Wayland desktop where multiple worlds share one desktop.
 
-`nixling-wlcontrol` shows which nixling VMs are running and surfaces the
-controls a nixling operator can already drive — start / stop / restart,
+`d2b-wlcontrol` shows which d2b realms are running and surfaces the
+controls a d2b operator can already drive — start / stop / restart,
 detached terminal launch, attach / detach USB, verify / build / boot /
 switch, and observability portal open — without ever touching anything privileged. It talks only to the
-nixlingd **public** socket and, where it is the better boundary, the
-official `nixling` CLI.
+d2bd **public** socket and, where it is the better boundary, the
+official `d2b` CLI.
 
-> Status: the Waybar indicator, the live nixlingd public-socket client,
+> Status: the Waybar indicator, the live d2bd public-socket client,
 > the reduced status model, auth-gated action planning, and the Quickshell
 > layer-shell popup are all in place. Audio mic/speaker controls remain out of
-> the popup pending a daemon-native nixling audio control plane.
+> the popup pending a daemon-native d2b audio control plane.
 
 ## What it does
 
@@ -25,28 +25,28 @@ official `nixling` CLI.
   controls, graceful stop as the primary Stop action, detached terminal launch,
   USB attach/detach, store verify/build/boot/switch icons, config-driven
   quick-launch icons, and an observability portal button, all gated on your
-  effective nixling authorization.
-- **nixling-native colors** — Waybar CSS consumes nixling's generated
-  `/etc/nixling/ui-colors.css` GTK `@define-color` names, while the popup
-  consumes `/etc/nixling/ui-colors.json` with visible built-in fallbacks.
+  effective d2b authorization.
+- **d2b-native colors** — Waybar CSS consumes d2b's generated
+  `/etc/d2b/ui-colors.css` GTK `@define-color` names, while the popup
+  consumes `/etc/d2b/ui-colors.json` with visible built-in fallbacks.
 - **Safe by construction** — public socket only; no broker socket, no
   `sudo`, no direct state-file mutation, argv-only command execution.
 
-Audio (mic / speaker) controls are intentionally not rendered until nixling
-exposes a daemon-native audio control plane — today those nixling verbs return
+Audio (mic / speaker) controls are intentionally not rendered until d2b
+exposes a daemon-native audio control plane — today those d2b verbs return
 `not-yet-implemented`.
 
 ## Install
 
-`nixling-wlcontrol` is a Nix flake.
+`d2b-wlcontrol` is a Nix flake.
 
 ```bash
 # Run it directly
-nix run github:vicondoa/nixling-wlcontrol -- status-json
+nix run github:vicondoa/d2b-wlcontrol -- status-json
 
 # Or add it as an input and install the package
-#   inputs.nixling-wlcontrol.url = "github:vicondoa/nixling-wlcontrol";
-# then add `nixling-wlcontrol.packages.${system}.default` to your packages.
+#   inputs.d2b-wlcontrol.url = "github:vicondoa/d2b-wlcontrol";
+# then add `d2b-wlcontrol.packages.${system}.default` to your packages.
 ```
 
 For development:
@@ -58,14 +58,14 @@ cargo test --workspace
 
 ## Waybar setup
 
-The Waybar module and its click bindings invoke the `nixling-wlcontrol`
+The Waybar module and its click bindings invoke the `d2b-wlcontrol`
 binary by name, so **install the package** (so it is on your `PATH`)
 rather than relying on `nix run` for the bar. Then print a starter
 module config and CSS:
 
 ```bash
-nixling-wlcontrol print-waybar-config   # add to your Waybar "modules" + a "modules-*" array
-nixling-wlcontrol print-css             # append to your style.css
+d2b-wlcontrol print-waybar-config   # add to your Waybar "modules" + a "modules-*" array
+d2b-wlcontrol print-css             # append to your style.css
 ```
 
 The module is a continuous custom module — it loops and emits one JSON
@@ -75,14 +75,14 @@ refreshes. See [docs/waybar.md](./docs/waybar.md).
 
 ## niri setup
 
-No niri window rule is required: `nixling-wlcontrol open` uses
+No niri window rule is required: `d2b-wlcontrol open` uses
 Quickshell's layer-shell surface as a draggable top-right popup. See
 [docs/niri.md](./docs/niri.md).
 
 ## Configuration
 
 Configuration is TOML at
-`${XDG_CONFIG_HOME:-~/.config}/nixling-wlcontrol/config.toml`. All
+`${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`. All
 defaults are sane; common overrides are the detached guest terminal command and
 observability URL.
 See [docs/configuration.md](./docs/configuration.md).

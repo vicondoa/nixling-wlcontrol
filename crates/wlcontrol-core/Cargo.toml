@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Domain model, config, reducers, and action planning for nixling-wlcontrol."
+description = "Domain model, config, reducers, and action planning for d2b-wlcontrol."
 
 [dependencies]
 serde.workspace = true
