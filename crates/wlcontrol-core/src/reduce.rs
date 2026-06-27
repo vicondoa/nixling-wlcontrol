@@ -6,12 +6,12 @@
 //! mapping per the plan's "State model" section.
 //!
 //! Precedence contract:
-//! 1. `inventory` (`nixling list`) defines the declared VM set, env, features,
+//! 1. `inventory` (`d2b list`) defines the declared VM set, env, features,
 //!    static IP, and default order.
-//! 2. `statuses` (`nixling status <vm>`) override runtime state, readiness, and
+//! 2. `statuses` (`d2b status <vm>`) override runtime state, readiness, and
 //!    pending-restart.
-//! 3. `usb` (`nixling usb probe`) attaches USB claims.
-//! 4. `auth` (`nixling auth status`) sets the effective role.
+//! 3. `usb` (`d2b usb probe`) attaches USB claims.
+//! 4. `auth` (`d2b auth status`) sets the effective role.
 //! 5. Missing/inconsistent inputs reduce to `Unknown`, never false-healthy.
 
 use std::collections::HashSet;

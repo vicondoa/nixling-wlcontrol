@@ -76,9 +76,9 @@ impl SeqpacketTransport {
         wait_for(&self.fd, PollFlags::POLLOUT, self.timeout, "send")?;
         let sent = send(self.fd.as_raw_fd(), &frame, MsgFlags::MSG_DONTWAIT).map_err(|err| {
             if matches!(err, Errno::EAGAIN) {
-                WlError::Timeout(format!("send to nixlingd after {:?}", self.timeout))
+                WlError::Timeout(format!("send to d2bd after {:?}", self.timeout))
             } else if matches!(err, Errno::EPIPE | Errno::ECONNRESET | Errno::ENOTCONN) {
-                WlError::DaemonDown(format!("nixlingd public socket closed during send: {err}"))
+                WlError::DaemonDown(format!("d2bd public socket closed during send: {err}"))
             } else {
                 WlError::Io(errno_to_io(err))
             }
@@ -99,14 +99,14 @@ impl SeqpacketTransport {
         let received =
             recv(self.fd.as_raw_fd(), &mut buffer, MsgFlags::MSG_DONTWAIT).map_err(|err| {
                 if matches!(err, Errno::EAGAIN) {
-                    WlError::Timeout(format!("receive from nixlingd after {:?}", self.timeout))
+                    WlError::Timeout(format!("receive from d2bd after {:?}", self.timeout))
                 } else {
                     WlError::Io(errno_to_io(err))
                 }
             })?;
         if received == 0 {
             return Err(WlError::DaemonDown(
-                "nixlingd public socket closed during receive".to_owned(),
+                "d2bd public socket closed during receive".to_owned(),
             ));
         }
         let payload = decode_frame(&buffer[..received])?;
@@ -117,11 +117,11 @@ impl SeqpacketTransport {
 fn wait_for(fd: &OwnedFd, events: PollFlags, timeout: Duration, op: &str) -> WlResult<()> {
     let mut pollfd = [PollFd::new(fd.as_fd(), events)];
     let timeout = PollTimeout::try_from(timeout)
-        .map_err(|err| WlError::Config(format!("invalid nixlingd timeout: {err}")))?;
+        .map_err(|err| WlError::Config(format!("invalid d2bd timeout: {err}")))?;
     let ready = poll(&mut pollfd, timeout).map_err(errno_to_io)?;
     if ready == 0 {
         return Err(WlError::Timeout(format!(
-            "{op} on nixlingd public socket after {:?}",
+            "{op} on d2bd public socket after {:?}",
             timeout.duration().unwrap_or_default()
         )));
     }
@@ -130,7 +130,7 @@ fn wait_for(fd: &OwnedFd, events: PollFlags, timeout: Duration, op: &str) -> WlR
         || (revents.contains(PollFlags::POLLHUP) && !revents.intersects(events))
     {
         return Err(WlError::DaemonDown(format!(
-            "{op} on nixlingd public socket failed ({revents:?})"
+            "{op} on d2bd public socket failed ({revents:?})"
         )));
     }
     Ok(())

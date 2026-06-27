@@ -210,9 +210,9 @@ pub fn plan(
         | ActionKind::AudioOff { .. } => return Err(Unavailable::NotYetImplemented),
         ActionKind::OpenControlCenter | ActionKind::CycleDisplay => {
             // These are handled in-process by the UI/Waybar layers, not as a
-            // nixling dispatch; planning them is a no-op socket refresh.
+            // d2b dispatch; planning them is a no-op socket refresh.
             return Err(Unavailable::Blocked {
-                detail: "handled in-process; not a nixling dispatch".into(),
+                detail: "handled in-process; not a d2b dispatch".into(),
             });
         }
     };
@@ -339,11 +339,11 @@ fn socket(intent: SocketIntent) -> PlannedAction {
 }
 
 /// Build the argv-only detached terminal launch command. There is no shell
-/// string and no interpolation: the nixling exec invocation and guest terminal
+/// string and no interpolation: the d2b exec invocation and guest terminal
 /// command are concatenated as discrete argv elements.
 fn terminal_argv(vm: &str, config: &Config) -> PlannedAction {
     let mut argv = vec![
-        "nixling".to_owned(),
+        "d2b".to_owned(),
         "vm".to_owned(),
         "exec".to_owned(),
         "-d".to_owned(),
@@ -363,7 +363,7 @@ fn quick_launch_argv(vm: &str, id: &str, config: &Config) -> Result<PlannedActio
         detail: format!("quick launch '{id}' is not configured for {vm}"),
     })?;
     let mut argv = vec![
-        "nixling".to_owned(),
+        "d2b".to_owned(),
         "vm".to_owned(),
         "exec".to_owned(),
         "-d".to_owned(),
@@ -387,7 +387,7 @@ fn quick_launch_config<'a>(
 
 fn build_argv(vm: &str) -> PlannedAction {
     PlannedAction::Process {
-        argv: vec!["nixling".to_owned(), "build".to_owned(), vm.to_owned()],
+        argv: vec!["d2b".to_owned(), "build".to_owned(), vm.to_owned()],
         wait: true,
     }
 }
@@ -529,7 +529,7 @@ mod tests {
         match planned {
             PlannedAction::Process { argv, wait } => {
                 assert!(wait);
-                assert_eq!(argv[0], "nixling");
+                assert_eq!(argv[0], "d2b");
                 assert!(argv.contains(&"corp-vm".to_owned()));
                 assert!(argv.contains(&"-d".to_owned()));
                 assert!(!argv.contains(&"-it".to_owned()));
@@ -824,7 +824,7 @@ mod tests {
         assert_eq!(
             build,
             PlannedAction::Process {
-                argv: vec!["nixling".into(), "build".into(), "corp-vm".into()],
+                argv: vec!["d2b".into(), "build".into(), "corp-vm".into()],
                 wait: true,
             }
         );
@@ -891,12 +891,12 @@ mod tests {
     #[test]
     fn process_actions_deserialize_without_wait_for_compatibility() {
         let action: PlannedAction =
-            serde_json::from_str(r#"{"dispatch":"process","argv":["nixling","build","corp-vm"]}"#)
+            serde_json::from_str(r#"{"dispatch":"process","argv":["d2b","build","corp-vm"]}"#)
                 .expect("old process action should deserialize");
         assert_eq!(
             action,
             PlannedAction::Process {
-                argv: vec!["nixling".into(), "build".into(), "corp-vm".into()],
+                argv: vec!["d2b".into(), "build".into(), "corp-vm".into()],
                 wait: false,
             }
         );
@@ -948,7 +948,7 @@ mod tests {
             planned,
             PlannedAction::Process {
                 argv: vec![
-                    "nixling".into(),
+                    "d2b".into(),
                     "vm".into(),
                     "exec".into(),
                     "-d".into(),

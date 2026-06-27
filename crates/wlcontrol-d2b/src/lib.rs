@@ -1,4 +1,4 @@
-//! Direct nixlingd public-socket client.
+//! Direct d2bd public-socket client.
 //!
 //! Owning wave: **Wave 1 — Protocol client agent**. Wave 0 fixes the public
 //! API surface (this module's signatures) so the Waybar / GTK / CLI crates can
@@ -9,10 +9,10 @@
 //! - length-prefix (4-byte little-endian) every JSON request frame;
 //! - read bounded responses and map `PublicResponse::Error` /
 //!   `MutatingVerbResponse` into typed [`WlError`] values;
-//! - translate raw nixling wire JSON into the neutral [`ReduceInput`] fragments.
+//! - translate raw d2b wire JSON into the neutral [`ReduceInput`] fragments.
 //!
 //! The protocol/transport details live in [`wire`]; high-level intents live on
-//! [`NixlingClient`].
+//! [`D2bClient`].
 
 use std::{path::Path, time::Duration};
 
@@ -40,18 +40,18 @@ pub struct DispatchOutcome {
     pub summary: String,
 }
 
-/// A connected (or connectable) nixlingd public-socket client.
+/// A connected (or connectable) d2bd public-socket client.
 ///
 /// The client is cheap to construct and does not hold a persistent connection;
 /// each call connects, negotiates, performs the request, and closes. This keeps
 /// the daemon-down/auth-denied posture observable on every refresh.
 #[derive(Debug, Clone)]
-pub struct NixlingClient {
+pub struct D2bClient {
     socket_path: String,
     timeout: Duration,
 }
 
-impl NixlingClient {
+impl D2bClient {
     /// Build a client from user configuration.
     pub fn new(config: &Config) -> Self {
         Self {
@@ -316,7 +316,7 @@ fn mutating_response_result(response: MutatingVerbResponse) -> WlResult<Dispatch
         "api-ready-timeout" => Err(WlError::Timeout(response.failure_message())),
         "invalid-request" => Err(WlError::Protocol(response.failure_message())),
         "dry-run-planned" | "not-yet-implemented" | "broker-error" => {
-            Err(WlError::Nixling(response.failure_message()))
+            Err(WlError::D2b(response.failure_message()))
         }
         other => Err(WlError::Protocol(format!(
             "unknown mutating verb outcome '{other}'"
@@ -338,7 +338,7 @@ fn request_value(transport: &SeqpacketTransport, payload: Vec<u8>) -> WlResult<V
     transport.send_payload(&payload)?;
     let response = transport.recv_payload()?;
     let value: Value = serde_json::from_slice(&response)
-        .map_err(|err| WlError::Protocol(format!("invalid JSON from nixlingd: {err}")))?;
+        .map_err(|err| WlError::Protocol(format!("invalid JSON from d2bd: {err}")))?;
     reject_error_response(&value)?;
     Ok(value)
 }
@@ -385,7 +385,7 @@ fn json_values<const N: usize>(fields: [(&str, Value); N]) -> Map<String, Value>
 
 fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
     let value: Value = serde_json::from_slice(bytes)
-        .map_err(|err| WlError::Protocol(format!("invalid hello JSON from nixlingd: {err}")))?;
+        .map_err(|err| WlError::Protocol(format!("invalid hello JSON from d2bd: {err}")))?;
     reject_error_response(&value)?;
     let type_name = value.get("type").and_then(Value::as_str);
     if type_name == Some("helloRejected") {
@@ -397,11 +397,11 @@ fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
             return Err(error.into_wl_error());
         }
         return Err(match reason {
-            "versionMismatch" => WlError::Protocol("nixlingd rejected client version".to_owned()),
+            "versionMismatch" => WlError::Protocol("d2bd rejected client version".to_owned()),
             "capabilityNegotiationFailed" => {
-                WlError::Protocol("nixlingd rejected client capabilities".to_owned())
+                WlError::Protocol("d2bd rejected client capabilities".to_owned())
             }
-            _ => WlError::Nixling(format!("nixlingd rejected hello: {reason}")),
+            _ => WlError::D2b(format!("d2bd rejected hello: {reason}")),
         });
     }
 
@@ -411,7 +411,7 @@ fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
             && value.get("selectedVersion").is_some());
     if !hello_ok {
         return Err(WlError::Protocol(
-            "unexpected nixlingd hello response".to_owned(),
+            "unexpected d2bd hello response".to_owned(),
         ));
     }
     let selected = value
@@ -420,7 +420,7 @@ fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
         .ok_or_else(|| WlError::Protocol("helloOk missing selectedVersion".to_owned()))?;
     selected_version_supported(selected).map_err(|reason| {
         WlError::Protocol(format!(
-            "nixlingd selected unsupported protocol version {selected}: {reason}"
+            "d2bd selected unsupported protocol version {selected}: {reason}"
         ))
     })
 }
@@ -532,13 +532,13 @@ fn reject_error_response(value: &Value) -> WlResult<()> {
         let error = value
             .get("error")
             .and_then(parse_daemon_error)
-            .unwrap_or_else(|| DaemonError::new("error", "nixlingd returned an error"));
+            .unwrap_or_else(|| DaemonError::new("error", "d2bd returned an error"));
         return Err(error.into_wl_error());
     }
     if value.get("kind").and_then(Value::as_str) == Some("error") {
         let error_value = value.get("payload").unwrap_or(value);
         let error = parse_daemon_error(error_value)
-            .unwrap_or_else(|| DaemonError::new("error", "nixlingd returned an error"));
+            .unwrap_or_else(|| DaemonError::new("error", "d2bd returned an error"));
         return Err(error.into_wl_error());
     }
     Ok(())
@@ -550,14 +550,14 @@ fn parse_daemon_error(value: &Value) -> Option<DaemonError> {
 
 fn reject_privileged_broker_socket(socket_path: &str) -> WlResult<()> {
     let trimmed = socket_path.trim_end_matches('/');
-    let is_canonical_broker = trimmed == "/run/nixling/priv.sock";
+    let is_canonical_broker = trimmed == "/run/d2b/priv.sock";
     let has_broker_filename = Path::new(trimmed)
         .file_name()
         .and_then(|name| name.to_str())
         == Some("priv.sock");
     if is_canonical_broker || has_broker_filename {
         return Err(WlError::Config(format!(
-            "refusing to connect wlcontrol to privileged nixling broker socket {socket_path}; configure the public socket instead"
+            "refusing to connect wlcontrol to privileged d2b broker socket {socket_path}; configure the public socket instead"
         )));
     }
     Ok(())
@@ -945,7 +945,7 @@ impl DaemonError {
         } else if self.kind == "wire-version-mismatch" || self.kind.starts_with("wire-") {
             WlError::Protocol(message)
         } else {
-            WlError::Nixling(message)
+            WlError::D2b(message)
         }
     }
 }
@@ -1009,26 +1009,26 @@ mod tests {
     #[test]
     fn client_carries_config() {
         let config = Config {
-            public_socket: "/run/nixling/test.sock".into(),
+            public_socket: "/run/d2b/test.sock".into(),
             command_timeout_ms: 1234,
             ..Default::default()
         };
-        let client = NixlingClient::new(&config);
-        assert_eq!(client.socket_path(), "/run/nixling/test.sock");
+        let client = D2bClient::new(&config);
+        assert_eq!(client.socket_path(), "/run/d2b/test.sock");
         assert_eq!(client.timeout(), Duration::from_millis(1234));
     }
 
     #[test]
     fn refresh_reports_daemon_down_for_absent_socket() {
-        let client = NixlingClient::new(&Config {
-            public_socket: "/run/nixling-wlcontrol-absent-public.sock".to_owned(),
+        let client = D2bClient::new(&Config {
+            public_socket: "/run/d2b-wlcontrol-absent-public.sock".to_owned(),
             ..Default::default()
         });
         assert_eq!(client.refresh().connectivity, Connectivity::DaemonDown);
     }
 
     #[test]
-    fn selected_version_range_matches_nixling_v04() {
+    fn selected_version_range_matches_d2b_v04() {
         assert!(selected_version_supported("0.4.0").is_ok());
         assert!(selected_version_supported("0.4.9").is_ok());
         assert!(selected_version_supported("0.4.0+build.1").is_ok());
@@ -1040,8 +1040,8 @@ mod tests {
 
     #[test]
     fn broker_socket_guard_rejects_priv_sock_paths() {
-        assert!(reject_privileged_broker_socket("/run/nixling/priv.sock").is_err());
+        assert!(reject_privileged_broker_socket("/run/d2b/priv.sock").is_err());
         assert!(reject_privileged_broker_socket("/custom/priv.sock").is_err());
-        assert!(reject_privileged_broker_socket("/run/nixling/public.sock").is_ok());
+        assert!(reject_privileged_broker_socket("/run/d2b/public.sock").is_ok());
     }
 }

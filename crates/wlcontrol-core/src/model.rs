@@ -1,10 +1,10 @@
-//! Frozen cross-crate domain contract for nixling-wlcontrol.
+//! Frozen cross-crate domain contract for d2b-wlcontrol.
 //!
 //! These types are the **stable internal contract** that every other crate
 //! builds against:
 //!
-//! - `wlcontrol-nixling` produces [`WlState`] / [`Vm`] / [`UsbClaim`] from the
-//!   nixlingd public socket.
+//! - `wlcontrol-d2b` produces [`WlState`] / [`Vm`] / [`UsbClaim`] from the
+//!   d2bd public socket.
 //! - `wlcontrol-waybar` and `wlcontrol-ui` render [`WlState`].
 //! - `wlcontrol-cli` dispatches [`PlannedAction`].
 //!
@@ -15,7 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Effective operator authorization, mirrored from `nixling auth status`.
+/// Effective operator authorization, mirrored from `d2b auth status`.
 ///
 /// This gates which controls the UI may enable. `Admin` is required for
 /// guest-control exec (terminal launch); lifecycle/USB verbs require at least
@@ -26,7 +26,7 @@ pub enum AuthRole {
     /// No recognized role; the public socket is unreachable or denied.
     #[default]
     None,
-    /// Recognized launcher. Current nixlingd keeps destructive lifecycle/USB
+    /// Recognized launcher. Current d2bd keeps destructive lifecycle/USB
     /// verbs admin-only; wlcontrol uses this role for non-destructive build.
     Launcher,
     /// Full admin: launcher plus guest-control exec.
@@ -35,7 +35,7 @@ pub enum AuthRole {
 
 /// Normalized runtime state for a single VM.
 ///
-/// This is a *reduced* state derived from `nixling list` + `nixling status`,
+/// This is a *reduced* state derived from `d2b list` + `d2b status`,
 /// never a raw passthrough of either. Inconsistent or unreadable inputs reduce
 /// to [`RuntimeState::Unknown`] (never to a false-healthy `Running`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -54,7 +54,7 @@ pub enum RuntimeState {
     Unknown,
 }
 
-/// A USBIP busid claim, mirrored from `nixling usb probe`.
+/// A USBIP busid claim, mirrored from `d2b usb probe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsbClaim {
@@ -79,12 +79,12 @@ pub struct VmFeatures {
     pub tpm: bool,
     pub usbip: bool,
     /// True when the VM declares `audio.enable`. Audio *control* is still
-    /// unavailable until nixling ships a daemon-native audio plane; this flag
+    /// unavailable until d2b ships a daemon-native audio plane; this flag
     /// only drives the disabled-with-reason affordance.
     pub audio: bool,
 }
 
-/// Runtime operations the connected nixling daemon says this VM supports.
+/// Runtime operations the connected d2b daemon says this VM supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VmCapabilities {
@@ -128,7 +128,7 @@ pub struct QuickLaunchIcon {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Vm {
-    /// VM name as declared in `nixling.vms.<name>`.
+    /// VM name as declared in `d2b.vms.<name>`.
     pub name: String,
     /// Environment name, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,7 +147,7 @@ pub struct Vm {
     /// Declared feature toggles.
     #[serde(default)]
     pub features: VmFeatures,
-    /// Runtime operation support reported by nixling.
+    /// Runtime operation support reported by d2b.
     #[serde(default)]
     pub capabilities: VmCapabilities,
     /// Static IP, when declared.
@@ -172,13 +172,13 @@ pub enum Connectivity {
     Connected,
     /// Public socket reachable but no role (controls are read-only/denied).
     AuthDenied,
-    /// `nixlingd` is unreachable.
+    /// `d2bd` is unreachable.
     #[default]
     DaemonDown,
 }
 
 /// The aggregate, reduced control-surface state. This is what every UI surface
-/// renders and what `nixling-wlcontrol status-json` emits.
+/// renders and what `d2b-wlcontrol status-json` emits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WlState {
@@ -228,7 +228,7 @@ impl WlState {
 }
 
 /// The set of operations the control surface can request. Each maps to a
-/// nixling public-socket request or an argv-only host process.
+/// d2b public-socket request or an argv-only host process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum ActionKind {
@@ -258,11 +258,11 @@ pub enum ActionKind {
     LaunchTerminal { vm: String },
     /// Run a configured custom guest quick-launch command.
     QuickLaunch { vm: String, id: String },
-    /// Toggle microphone forwarding for a VM (disabled until nixling supports it).
+    /// Toggle microphone forwarding for a VM (disabled until d2b supports it).
     AudioMic { vm: String, on: bool },
-    /// Toggle speaker forwarding for a VM (disabled until nixling supports it).
+    /// Toggle speaker forwarding for a VM (disabled until d2b supports it).
     AudioSpeaker { vm: String, on: bool },
-    /// Disable all audio forwarding for a VM (disabled until nixling supports it).
+    /// Disable all audio forwarding for a VM (disabled until d2b supports it).
     AudioOff { vm: String },
     /// Open / focus the Quickshell control center.
     OpenControlCenter,
@@ -276,7 +276,7 @@ pub enum ActionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "reason")]
 pub enum Unavailable {
-    /// `nixlingd` is unreachable.
+    /// `d2bd` is unreachable.
     DaemonDown,
     /// Caller role is insufficient for this action.
     InsufficientRole { required: AuthRole },
@@ -284,7 +284,7 @@ pub enum Unavailable {
     VmState { detail: String },
     /// USB device is owned by another VM.
     UsbOwnedElsewhere { owner: String },
-    /// Backed by a nixling surface that is not yet implemented.
+    /// Backed by a d2b surface that is not yet implemented.
     NotYetImplemented,
     /// Generic block with a human-facing detail.
     Blocked { detail: String },
@@ -330,7 +330,7 @@ impl ActionAvailability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "dispatch")]
 pub enum PlannedAction {
-    /// A nixling public-socket intent the protocol client should execute.
+    /// A d2b public-socket intent the protocol client should execute.
     Socket { intent: SocketIntent },
     /// A host process, expressed as an argv vector.
     Process {
@@ -340,7 +340,7 @@ pub enum PlannedAction {
     },
 }
 
-/// A typed nixling public-socket intent. The protocol client maps each variant
+/// A typed d2b public-socket intent. The protocol client maps each variant
 /// onto the corresponding `PublicRequest`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "intent")]

@@ -1,19 +1,19 @@
-// nixling-wlcontrol — Waybar custom module.
+// d2b-wlcontrol — Waybar custom module.
 //
 // Add this object to the "modules-*" arrays in your Waybar config and place
-// "custom/nixling-wlcontrol" where you want the indicator to appear.
+// "custom/d2b-wlcontrol" where you want the indicator to appear.
 //
 // The module is a continuous (self-looping) custom module: it emits one JSON
 // line per refresh and must NOT be given an "interval".
 // "signal": 8 pairs with the module's SIGRTMIN+8 on-demand refresh, so
-// `nixling-wlcontrol action cycle-display` updates the bar immediately.
-"custom/nixling-wlcontrol": {
-  "exec": "nixling-wlcontrol waybar",
+// `d2b-wlcontrol action cycle-display` updates the bar immediately.
+"custom/d2b-wlcontrol": {
+  "exec": "d2b-wlcontrol waybar",
   "return-type": "json",
   "restart-interval": 5,
   "signal": 8,
-  "on-click": "nixling-wlcontrol open",
-  "on-click-right": "nixling-wlcontrol action cycle-display",
-  "on-click-middle": "nixling-wlcontrol action refresh",
+  "on-click": "d2b-wlcontrol open",
+  "on-click-right": "d2b-wlcontrol action cycle-display",
+  "on-click-middle": "d2b-wlcontrol action refresh",
   "tooltip": true
 }

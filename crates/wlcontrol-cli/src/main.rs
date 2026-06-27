@@ -1,5 +1,5 @@
-//! `nixling-wlcontrol` — Waybar module, control-center launcher, and action
-//! dispatcher for nixling VMs.
+//! `d2b-wlcontrol` — Waybar module, control-center launcher, and action
+//! dispatcher for d2b VMs.
 //!
 //! Owning wave: **Wave 0 (integrator) skeleton**; **Wave 2 — CLI/action shell
 //! agent** hardens the Waybar loop (signals, no-overlap refresh, backoff),
@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use wlcontrol_core::model::{ActionKind, Connectivity, Unavailable};
 use wlcontrol_core::{plan, reduce, Config, PlannedAction, WlState};
-use wlcontrol_nixling::NixlingClient;
+use wlcontrol_d2b::D2bClient;
 use wlcontrol_waybar::DisplayMode;
 
 /// Starter Waybar config snippet, kept in sync with `data/`.
@@ -31,7 +31,7 @@ const STYLE_SNIPPET: &str = include_str!("../../../data/style.css");
 const WAYBAR_REFRESH_SIGNAL_OFFSET: c_int = 8;
 const WAYBAR_MAX_DAEMON_DOWN_BACKOFF: Duration = Duration::from_secs(30);
 const WAYBAR_SLEEP_GRANULARITY: Duration = Duration::from_millis(100);
-const STATE_APP_DIR: &str = "nixling-wlcontrol";
+const STATE_APP_DIR: &str = "d2b-wlcontrol";
 const DISPLAY_MODE_FILE: &str = "display-mode";
 const WAYBAR_PID_FILE: &str = "waybar.pid";
 const O_NOFOLLOW_FLAG: i32 = 0o400000;
@@ -49,9 +49,9 @@ unsafe extern "C" {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "nixling-wlcontrol",
+    name = "d2b-wlcontrol",
     version,
-    about = "Clean Waybar indicator and control center for nixling VMs."
+    about = "Clean Waybar indicator and control center for d2b VMs."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -140,7 +140,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("nixling-wlcontrol: {err}");
+            eprintln!("d2b-wlcontrol: {err}");
             ExitCode::from(1)
         }
     }
@@ -167,7 +167,7 @@ fn run(cli: Cli) -> wlcontrol_core::WlResult<ExitCode> {
 
 /// Build the current reduced state from one refresh cycle.
 fn current_state(config: &Config) -> WlState {
-    let client = NixlingClient::new(config);
+    let client = D2bClient::new(config);
     reduce::reduce_with_config(client.refresh(), config)
 }
 
@@ -210,7 +210,7 @@ fn scan_usb_devices() -> Vec<UsbDeviceOutput> {
         .collect::<Vec<_>>();
 
     devices.sort_by(|a, b| {
-        // Most nixling USB passthrough use is YubiKey; surface Yubico devices
+        // Most d2b USB passthrough use is YubiKey; surface Yubico devices
         // first, then stable bus-id ordering.
         let a_yubi = a.vendor_id.eq_ignore_ascii_case("1050");
         let b_yubi = b.vendor_id.eq_ignore_ascii_case("1050");
@@ -298,7 +298,7 @@ fn run_open(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
 
 fn run_action(config: &Config, action: ActionKind) -> wlcontrol_core::WlResult<ExitCode> {
     let state = action_planning_state(config, &action);
-    let client = NixlingClient::new(config);
+    let client = D2bClient::new(config);
 
     match plan::plan(&action, &state, config) {
         Err(Unavailable::Blocked { .. }) if action == ActionKind::OpenControlCenter => {
@@ -322,7 +322,7 @@ fn run_action(config: &Config, action: ActionKind) -> wlcontrol_core::WlResult<E
         Ok(PlannedAction::Process { argv, wait }) => run_process(argv, wait, config),
         Err(reason) => {
             eprintln!(
-                "nixling-wlcontrol: action unavailable: {}",
+                "d2b-wlcontrol: action unavailable: {}",
                 describe_unavailable(&reason)
             );
             Ok(ExitCode::from(1))
@@ -358,8 +358,8 @@ fn run_process(
     };
     let mut command = std::process::Command::new(program);
     command.args(args);
-    if is_nixling_program(program) {
-        command.env("NIXLING_PUBLIC_SOCKET", &config.public_socket);
+    if is_d2b_program(program) {
+        command.env("D2B_PUBLIC_SOCKET", &config.public_socket);
     }
     if wait {
         let output = command.output()?;
@@ -376,11 +376,11 @@ fn run_process(
     Ok(ExitCode::SUCCESS)
 }
 
-fn is_nixling_program(program: &str) -> bool {
+fn is_d2b_program(program: &str) -> bool {
     Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
-        == Some("nixling")
+        == Some("d2b")
 }
 
 extern "C" fn waybar_signal_handler(_signal: c_int) {
@@ -645,7 +645,7 @@ fn cmdline_matches_waybar(bytes: &[u8]) -> bool {
 }
 
 fn program_basename_matches(program: &[u8]) -> bool {
-    program.rsplit(|b| *b == b'/').next() == Some(b"nixling-wlcontrol".as_slice())
+    program.rsplit(|b| *b == b'/').next() == Some(b"d2b-wlcontrol".as_slice())
 }
 
 fn signal_waybar_from_pidfile() {
@@ -670,7 +670,7 @@ fn signal_waybar_from_pidfile() {
 
 fn describe_unavailable(reason: &Unavailable) -> String {
     match reason {
-        Unavailable::DaemonDown => "nixlingd is unreachable".to_owned(),
+        Unavailable::DaemonDown => "d2bd is unreachable".to_owned(),
         Unavailable::InsufficientRole { required } => {
             format!("requires {} role", auth_role_name(*required))
         }
@@ -805,16 +805,16 @@ mod tests {
     #[test]
     fn pidfile_matching_requires_waybar_subcommand() {
         assert!(cmdline_matches_waybar(
-            b"/nix/store/bin/nixling-wlcontrol\0waybar\0"
+            b"/nix/store/bin/d2b-wlcontrol\0waybar\0"
         ));
         assert!(!cmdline_matches_waybar(
-            b"/nix/store/bin/nixling-wlcontrol\0open\0"
+            b"/nix/store/bin/d2b-wlcontrol\0open\0"
         ));
         assert!(!cmdline_matches_waybar(
-            b"/nix/store/bin/nixling-wlcontrol\0action\0stop\0waybar\0"
+            b"/nix/store/bin/d2b-wlcontrol\0action\0stop\0waybar\0"
         ));
         assert!(!cmdline_matches_waybar(
-            b"/nix/store/bin/not-nixling-wlcontrol\0waybar\0"
+            b"/nix/store/bin/not-d2b-wlcontrol\0waybar\0"
         ));
         assert!(!cmdline_matches_waybar(b"/bin/other\0waybar\0"));
     }
