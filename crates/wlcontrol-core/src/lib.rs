@@ -12,9 +12,8 @@ pub mod reduce;
 pub mod sources;
 
 pub use config::{
-    default_ui_colors, is_public_socket_path, load_ui_colors_from_path, Config, UiColorArtifact,
-    UiColorBorder, UiColorDegraded, UiColorEnv, UiColorFallbackReason, UiColorHost, UiColorLoad,
-    UiColorStates, UiColorVm, DEFAULT_COLOR_ARTIFACT_PATH,
+    is_public_socket_path, load_ui_colors_from_path, Config, UiColorArtifact, UiColorBorder,
+    UiColorEnv, UiColorHost, UiColorStates, UiColorVm, DEFAULT_COLOR_ARTIFACT_PATH,
 };
 pub use error::{WlError, WlResult};
 pub use model::{

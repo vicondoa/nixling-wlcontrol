@@ -2,8 +2,9 @@
 //!
 //! `d2b-wlcontrol` is a Waybar-adjacent desktop shell widget, not a
 //! document-style application. The visible frontend is therefore a Quickshell
-//! layer-shell popup with explicit Waybar/Catppuccin colours, while Rust remains
-//! the backend (`status-json` + `action …`) and the safe process launcher.
+//! layer-shell popup with neutral shell styling and d2b-owned accent colors,
+//! while Rust remains the backend (`status-json` + `action …`) and the safe
+//! process launcher.
 
 use std::{
     env, fs,
@@ -56,13 +57,10 @@ pub fn open(config: &Config) -> WlResult<()> {
     let qml_path = materialize_qml(&dir)?;
     let backend = env::current_exe()
         .map_err(|err| WlError::Config(format!("failed to locate backend binary: {err}")))?;
-    let color_load = config.load_ui_colors();
-    let theme_json = serde_json::to_string(&color_load.colors)?;
-    let theme_degraded = color_load
-        .degraded
-        .as_ref()
-        .map(|degraded| degraded.message.as_str())
-        .unwrap_or("");
+    let theme_json = match config.load_ui_colors()? {
+        Some(colors) => serde_json::to_string(&colors)?,
+        None => "{}".to_owned(),
+    };
 
     let mut child = Command::new("quickshell")
         .arg("--path")
@@ -70,7 +68,6 @@ pub fn open(config: &Config) -> WlResult<()> {
         .arg("--no-duplicate")
         .env("D2B_WLCONTROL_BIN", backend)
         .env("D2B_WLCONTROL_THEME_JSON", theme_json)
-        .env("D2B_WLCONTROL_THEME_DEGRADED", theme_degraded)
         .env(
             "D2B_WLCONTROL_OBSERVABILITY_ENABLED",
             if config.observability.enabled && config.observability.url.is_some() {
@@ -209,8 +206,7 @@ fn cmdline_matches_quickshell(pid: u32, runtime_dir: &Path) -> bool {
 ///
 /// Notes:
 /// - Uses argv-vector `Process` commands; no shell strings.
-/// - Colours prefer d2b color artifact data and fall back to visible
-///   Catppuccin/Waybar-style tokens.
+/// - Neutral shell colors stay local; colored accents come from d2b's UI artifact.
 /// - The panel is a draggable layer-shell overlay anchored near the top-right.
 const QML_SOURCE: &str = r##"
 //@ pragma StateDir $XDG_STATE_HOME/d2b-wlcontrol/quickshell
@@ -238,19 +234,7 @@ ShellRoot {
   property int forceConfirmMs: 5200
   property bool observabilityEnabled: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
   property string observabilitySuccess: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
-  property string themeDegraded: Quickshell.env("D2B_WLCONTROL_THEME_DEGRADED") || ""
-  property var fallbackStateColors: ({
-    running: "#a6e3a1",
-    transitioning: "#f9e2af",
-    pendingRestart: "#fab387",
-    error: "#f38ba8",
-    denied: "#cba6f7",
-    unknown: "#6c7086"
-  })
-  property string fallbackHostAccent: "#89b4fa"
   property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_THEME_JSON"))
-  property var stateColorsEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_STATE_COLORS"))
-  property var envColorsEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_ENV_COLORS"))
 
   function visibleVms() {
     const vms = state.vms || []
@@ -278,14 +262,7 @@ ShellRoot {
     }
   }
 
-  function statusTheme() {
-    const candidate = state.uiColors || state.colorTheme || state.theme || ({})
-    return candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate : ({})
-  }
-
   function themeSection(name) {
-    const fromStatus = statusTheme()[name]
-    if (fromStatus && typeof fromStatus === "object" && !Array.isArray(fromStatus)) return fromStatus
     const fromEnv = artifactThemeEnv[name]
     if (fromEnv && typeof fromEnv === "object" && !Array.isArray(fromEnv)) return fromEnv
     return ({})
@@ -295,28 +272,32 @@ ShellRoot {
     return typeof value === "string" && /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value)
   }
 
-  function colorOr(value, fallback) {
-    return isHexColor(value) ? value : fallback
-  }
-
   function stateColor(name) {
     const states = themeSection("states")
-    return colorOr(states[name], colorOr(stateColorsEnv[name], fallbackStateColors[name] || fallbackStateColors.unknown))
+    const color = states[name]
+    return isHexColor(color) ? color : "transparent"
   }
 
   function hostAccentColor() {
     const host = themeSection("host")
-    return colorOr(host.accent, colorOr(Quickshell.env("D2B_WLCONTROL_HOST_ACCENT"), fallbackHostAccent))
+    return isHexColor(host.accent) ? host.accent : "transparent"
   }
 
   function envAccentColor(env) {
     if (!env) return hostAccentColor()
     const envs = themeSection("envs")
     const themed = envs[env]
-    const flattened = envColorsEnv[env]
     const themedAccent = themed && typeof themed === "object" ? themed.accent : themed
-    const flattenedAccent = flattened && typeof flattened === "object" ? flattened.accent : flattened
-    return colorOr(themedAccent, colorOr(flattenedAccent, hostAccentColor()))
+    return isHexColor(themedAccent) ? themedAccent : "transparent"
+  }
+
+  function vmBorderColor(vm) {
+    if (!vm || !vm.name) return hostAccentColor()
+    const vms = themeSection("vms")
+    const themed = vms[vm.name]
+    const border = themed && typeof themed === "object" ? themed.border : null
+    const active = border && typeof border === "object" ? border.active : null
+    return isHexColor(active) ? active : "transparent"
   }
 
   function vmDotColor(vm) {
@@ -378,7 +359,6 @@ ShellRoot {
 
   function statusText() {
     if (actionMessage.length > 0) return actionMessage
-    if (themeDegraded.length > 0 && state.connectivity === "connected") return "theme fallback"
     if (busy) return "working…"
     if (state.connectivity === "connected") return "live"
     if (state.connectivity === "auth-denied") return "auth denied"
@@ -823,7 +803,7 @@ ShellRoot {
                   height: cardContent.implicitHeight + 16
                   radius: 13
                   color: "#16181d"
-                  border.color: root.envAccentColor(vm.env)
+                  border.color: root.vmBorderColor(vm)
                   border.width: 1
                   clip: true
 
@@ -832,7 +812,7 @@ ShellRoot {
                   property bool usbEntryVisible: false
                   property string usbEntryText: ""
 
-                  // Left accent border follows the d2b env color contract.
+                  // Left accent stripe follows the d2b env color contract.
                   Rectangle {
                     id: leftAccent
                     width: 4
@@ -1027,7 +1007,7 @@ ShellRoot {
                         anchors.leftMargin: 9
                         anchors.rightMargin: 9
                         color: "#ffffff"
-                        selectionColor: "#89b4fa"
+                        selectionColor: root.hostAccentColor()
                         selectedTextColor: "#000000"
                         font.pixelSize: 12
                         verticalAlignment: TextInput.AlignVCenter
@@ -1095,7 +1075,7 @@ ShellRoot {
   component IconButton: Rectangle {
     property alias text: label.text
     property string tooltip: ""
-    property color accent: "#89b4fa"
+    property color accent: "#6c7086"
     property bool prominent: false
     signal clicked()
     width: prominent ? 30 : 26
@@ -1132,7 +1112,7 @@ ShellRoot {
     property string icon: ""
     property string label: ""
     property string tooltip: ""
-    property color accent: "#89b4fa"
+    property color accent: "#6c7086"
     signal clicked()
 
     height: 24
@@ -1196,10 +1176,24 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_OBSERVABILITY_ENABLED"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_THEME_JSON"));
-        assert!(QML_SOURCE.contains("D2B_WLCONTROL_STATE_COLORS"));
+        assert!(QML_SOURCE.contains("color: \"#16181d\""));
+        assert!(QML_SOURCE.contains("color: \"#ffffff\""));
+        assert!(QML_SOURCE.contains("color: \"#9399b2\""));
+        assert!(!QML_SOURCE.contains("D2B_WLCONTROL_STATE_COLORS"));
+        assert!(!QML_SOURCE.contains("D2B_WLCONTROL_ENV_COLORS"));
+        assert!(!QML_SOURCE.contains("D2B_WLCONTROL_HOST_ACCENT"));
+        assert!(!QML_SOURCE.contains("fallbackStateColors"));
+        assert!(!QML_SOURCE.contains("fallbackHostAccent"));
+        assert!(!QML_SOURCE.contains("property color accent: \"#89b4fa\""));
         assert!(QML_SOURCE.contains("function stateColor(name)"));
-        assert!(QML_SOURCE.contains("border.color: root.envAccentColor(vm.env)"));
-        assert!(!QML_SOURCE.contains("vmBorderColor"));
+        assert!(QML_SOURCE.contains("return isHexColor(color) ? color : \"transparent\""));
+        assert!(QML_SOURCE.contains("function vmBorderColor(vm)"));
+        assert!(QML_SOURCE.contains(
+            "const active = border && typeof border === \"object\" ? border.active : null"
+        ));
+        assert!(QML_SOURCE.contains("return isHexColor(active) ? active : \"transparent\""));
+        assert!(QML_SOURCE.contains("border.color: root.vmBorderColor(vm)"));
+        assert!(QML_SOURCE.contains("color: root.envAccentColor(vm.env)"));
         assert!(!QML_SOURCE.contains("vmBorderTheme"));
         assert!(QML_SOURCE.contains("root.stateColor(\"pendingRestart\")"));
         assert!(!QML_SOURCE.contains("if (e === \"work\")"));
