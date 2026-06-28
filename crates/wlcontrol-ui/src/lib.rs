@@ -227,8 +227,8 @@ ShellRoot {
   property string actionMessage: ""
   property bool actionFailed: false
   property bool actionBusy: false
-  property real panelTopMargin: 8
-  property real panelRightMargin: 8
+  property real panelTopMargin: 24
+  property real panelRightMargin: 24
   property string confirmKey: ""
   property int normalConfirmMs: 2200
   property int forceConfirmMs: 5200
@@ -281,14 +281,6 @@ ShellRoot {
   function hostAccentColor() {
     const host = themeSection("host")
     return isHexColor(host.accent) ? host.accent : "transparent"
-  }
-
-  function envAccentColor(env) {
-    if (!env) return hostAccentColor()
-    const envs = themeSection("envs")
-    const themed = envs[env]
-    const themedAccent = themed && typeof themed === "object" ? themed.accent : themed
-    return isHexColor(themedAccent) ? themedAccent : "transparent"
   }
 
   function vmBorderColor(vm) {
@@ -714,7 +706,7 @@ ShellRoot {
             Row {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              spacing: 4
+              spacing: 8
 
               IconButton {
                 text: "monitoring"
@@ -811,16 +803,6 @@ ShellRoot {
                   property bool expanded: false
                   property bool usbEntryVisible: false
                   property string usbEntryText: ""
-
-                  // Left accent stripe follows the d2b env color contract.
-                  Rectangle {
-                    id: leftAccent
-                    width: 4
-                    height: parent.height
-                    x: 0
-                    y: 0
-                    color: root.envAccentColor(vm.env)
-                  }
 
                 Column {
                   id: cardContent
@@ -1167,6 +1149,9 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("PanelWindow"));
         assert!(QML_SOURCE.contains("id: vmListFlickable"));
         assert!(QML_SOURCE.contains("x: vmListFlickable.width - width"));
+        assert!(QML_SOURCE.contains("property real panelTopMargin: 24"));
+        assert!(QML_SOURCE.contains("property real panelRightMargin: 24"));
+        assert!(QML_SOURCE.contains("spacing: 8"));
         assert!(QML_SOURCE.contains("model: vm.quickLaunch || []"));
         assert!(QML_SOURCE.contains("[\"quick-launch\", vm.name, modelData.id]"));
         assert!(QML_SOURCE.contains("function hasCapability(vm, capability)"));
@@ -1193,7 +1178,9 @@ mod qml_tests {
         ));
         assert!(QML_SOURCE.contains("return isHexColor(active) ? active : \"transparent\""));
         assert!(QML_SOURCE.contains("border.color: root.vmBorderColor(vm)"));
-        assert!(QML_SOURCE.contains("color: root.envAccentColor(vm.env)"));
+        assert!(!QML_SOURCE.contains("function envAccentColor"));
+        assert!(!QML_SOURCE.contains("leftAccent"));
+        assert!(!QML_SOURCE.contains("root.envAccentColor"));
         assert!(!QML_SOURCE.contains("vmBorderTheme"));
         assert!(QML_SOURCE.contains("root.stateColor(\"pendingRestart\")"));
         assert!(!QML_SOURCE.contains("if (e === \"work\")"));
