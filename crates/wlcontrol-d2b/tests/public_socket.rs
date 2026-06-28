@@ -17,7 +17,7 @@ use nix::sys::socket::{
 };
 use serde_json::{json, Value};
 use wlcontrol_core::{
-    model::{AuthRole, Connectivity, RuntimeState, SocketIntent},
+    model::{AudioChannel, AuthRole, Connectivity, RuntimeState, SocketIntent},
     Config, WlError,
 };
 use wlcontrol_d2b::{wire, D2bClient};
@@ -53,6 +53,40 @@ fn refresh_populates_reduce_input_from_public_socket() {
     assert!(usb.claims[0].bound);
     assert_eq!(usb.claims[0].owner_vm.as_deref(), Some("corp-vm"));
 
+    server.join();
+}
+
+#[test]
+fn refresh_populates_audio_from_public_socket() {
+    let server = FakeD2bd::start(FakeMode::RefreshWithAudio);
+    let client = client_for(server.path());
+
+    let input = client.refresh();
+
+    let audio = input.audio.expect("audio");
+    assert_eq!(audio.entries.len(), 1);
+    assert_eq!(audio.entries[0].vm, "corp-vm");
+    assert_eq!(audio.entries[0].audio.speaker.level, Some(80));
+    assert!(!audio.entries[0].audio.speaker.muted);
+    assert_eq!(audio.entries[0].audio.microphone.level, Some(50));
+    assert!(audio.entries[0].audio.microphone.muted);
+    assert!(audio.errors.is_empty());
+    server.join();
+}
+
+#[test]
+fn refresh_preserves_audio_status_errors() {
+    let server = FakeD2bd::start(FakeMode::RefreshWithAudioError);
+    let client = client_for(server.path());
+
+    let input = client.refresh();
+
+    let audio = input.audio.expect("audio");
+    assert!(audio.entries.is_empty());
+    assert_eq!(audio.errors.len(), 1);
+    assert_eq!(audio.errors[0].vm, "corp-vm");
+    assert_eq!(audio.errors[0].kind, "provider-misconfigured");
+    assert_eq!(audio.errors[0].remediation.as_deref(), Some("start guestd"));
     server.join();
 }
 
@@ -171,6 +205,168 @@ fn boot_dispatch_returns_applied_summary() {
         .expect("dispatch");
 
     assert_eq!(outcome.summary, "staged corp-vm for next boot");
+    server.join();
+}
+
+#[test]
+fn audio_mute_dispatch_sends_public_audio_op() {
+    let server = FakeD2bd::start(FakeMode::AudioMuteOk);
+    let client = client_for(server.path());
+
+    let outcome = client
+        .dispatch(&SocketIntent::AudioMute {
+            vm: "corp-vm".to_owned(),
+            channel: AudioChannel::Microphone,
+            mute: false,
+        })
+        .expect("dispatch");
+
+    assert_eq!(outcome.summary, "audio corp-vm microphone: unmuted");
+    server.join();
+}
+
+#[test]
+fn audio_volume_dispatch_sends_public_audio_op() {
+    let server = FakeD2bd::start(FakeMode::AudioSetVolumeOk);
+    let client = client_for(server.path());
+
+    let outcome = client
+        .dispatch(&SocketIntent::AudioSetVolume {
+            vm: "corp-vm".to_owned(),
+            channel: AudioChannel::Speaker,
+            level_percent: 42,
+        })
+        .expect("dispatch");
+
+    assert_eq!(outcome.summary, "audio corp-vm speaker level: 42%");
+    server.join();
+}
+
+#[test]
+fn audio_off_dispatch_mutes_both_channels_and_reports_combined_summary() {
+    let server = FakeD2bd::start(FakeMode::AudioOffOk);
+    let client = client_for(server.path());
+
+    let outcome = client
+        .dispatch(&SocketIntent::AudioOff {
+            vm: "corp-vm".to_owned(),
+        })
+        .expect("dispatch");
+
+    assert_eq!(outcome.summary, "audio corp-vm disabled");
+    server.join();
+}
+
+#[test]
+fn audio_off_attempts_speaker_even_when_microphone_fails() {
+    let server = FakeD2bd::start(FakeMode::AudioOffMicrophoneError);
+    let client = client_for(server.path());
+
+    let error = client
+        .dispatch(&SocketIntent::AudioOff {
+            vm: "corp-vm".to_owned(),
+        })
+        .expect_err("audio off error");
+
+    assert!(matches!(error, WlError::D2b(ref message) if message.contains("microphone")));
+    server.join();
+}
+
+#[test]
+fn audio_off_does_not_retry_after_fatal_microphone_transport_failure() {
+    let server = FakeD2bd::start(FakeMode::AudioOffMicrophoneProtocolError);
+    let client = client_for(server.path());
+
+    let error = client
+        .dispatch(&SocketIntent::AudioOff {
+            vm: "corp-vm".to_owned(),
+        })
+        .expect_err("audio off protocol error");
+
+    assert!(matches!(error, WlError::Protocol(_)));
+    server.join();
+}
+
+#[test]
+fn audio_off_preserves_fatal_speaker_transport_failure() {
+    let server = FakeD2bd::start(FakeMode::AudioOffMicrophoneErrorSpeakerProtocolError);
+    let client = client_for(server.path());
+
+    let error = client
+        .dispatch(&SocketIntent::AudioOff {
+            vm: "corp-vm".to_owned(),
+        })
+        .expect_err("audio off speaker protocol error");
+
+    assert!(matches!(error, WlError::Protocol(_)));
+    server.join();
+}
+
+#[test]
+fn audio_off_returns_speaker_domain_error_after_microphone_success() {
+    let server = FakeD2bd::start(FakeMode::AudioOffSpeakerError);
+    let client = client_for(server.path());
+
+    let error = client
+        .dispatch(&SocketIntent::AudioOff {
+            vm: "corp-vm".to_owned(),
+        })
+        .expect_err("audio off speaker error");
+
+    assert!(matches!(error, WlError::D2b(ref message) if message.contains("speaker path failed")));
+    server.join();
+}
+
+#[test]
+fn audio_dispatch_errors_map_to_typed_errors() {
+    let server = FakeD2bd::start(FakeMode::AudioError);
+    let client = client_for(server.path());
+
+    let error = client
+        .dispatch(&SocketIntent::AudioMute {
+            vm: "corp-vm".to_owned(),
+            channel: AudioChannel::Speaker,
+            mute: true,
+        })
+        .expect_err("audio error");
+
+    assert!(
+        matches!(error, WlError::D2b(ref message) if message.contains("provider-misconfigured"))
+    );
+    server.join();
+}
+
+#[test]
+fn audio_dispatch_maps_daemon_auth_denied() {
+    let server = FakeD2bd::start(FakeMode::AudioAuthDenied);
+    let client = client_for(server.path());
+
+    let error = client
+        .dispatch(&SocketIntent::AudioSetVolume {
+            vm: "corp-vm".to_owned(),
+            channel: AudioChannel::Speaker,
+            level_percent: 42,
+        })
+        .expect_err("audio auth denied");
+
+    assert!(matches!(error, WlError::Denied(ref message) if message.contains("admin")));
+    server.join();
+}
+
+#[test]
+fn audio_set_volume_rejects_out_of_range_before_request() {
+    let server = FakeD2bd::start(FakeMode::AudioNoRequestAfterHello);
+    let client = client_for(server.path());
+
+    let error = client
+        .dispatch(&SocketIntent::AudioSetVolume {
+            vm: "corp-vm".to_owned(),
+            channel: AudioChannel::Speaker,
+            level_percent: 101,
+        })
+        .expect_err("audio level rejected");
+
+    assert!(matches!(error, WlError::Config(ref message) if message.contains("between 0 and 100")));
     server.join();
 }
 
@@ -388,6 +584,8 @@ impl ExpectedError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FakeMode {
     Refresh,
+    RefreshWithAudio,
+    RefreshWithAudioError,
     RejectHello,
     VmStartOk,
     VmRestartOk,
@@ -400,6 +598,16 @@ enum FakeMode {
     MutatingBrokerError,
     MutatingInvalidRequest,
     UsbProbeBrokerError,
+    AudioMuteOk,
+    AudioSetVolumeOk,
+    AudioOffOk,
+    AudioOffMicrophoneError,
+    AudioOffMicrophoneProtocolError,
+    AudioOffMicrophoneErrorSpeakerProtocolError,
+    AudioOffSpeakerError,
+    AudioError,
+    AudioAuthDenied,
+    AudioNoRequestAfterHello,
     AcceptThenStall,
     CloseAfterHello,
     /// Answer `authStatus` successfully, then close the next connection
@@ -458,6 +666,13 @@ impl FakeD2bd {
 fn serve(listener: OwnedFd, mode: FakeMode) {
     if mode == FakeMode::Refresh {
         for expected in ["authStatus", "status"] {
+            serve_connection(&listener, mode, Some(expected));
+        }
+    } else if matches!(
+        mode,
+        FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError
+    ) {
+        for expected in ["authStatus", "status", "audio"] {
             serve_connection(&listener, mode, Some(expected));
         }
     } else if mode == FakeMode::RefreshAuthThenClose {
@@ -522,11 +737,154 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
         FakeMode::CloseAfterHello => return,
         _ => {}
     }
+    if matches!(
+        mode,
+        FakeMode::AudioMuteOk
+            | FakeMode::AudioSetVolumeOk
+            | FakeMode::AudioOffOk
+            | FakeMode::AudioOffMicrophoneError
+            | FakeMode::AudioOffMicrophoneProtocolError
+            | FakeMode::AudioOffMicrophoneErrorSpeakerProtocolError
+            | FakeMode::AudioOffSpeakerError
+            | FakeMode::AudioError
+            | FakeMode::AudioAuthDenied
+            | FakeMode::AudioNoRequestAfterHello
+    ) {
+        if mode == FakeMode::AudioNoRequestAfterHello {
+            assert_eq!(
+                recv_json(&conn)
+                    .expect_err("client closes after hello")
+                    .kind(),
+                io::ErrorKind::UnexpectedEof
+            );
+            return;
+        }
+        serve_audio_mutation_connection(&conn, mode);
+        return;
+    }
 
     let request = recv_json(&conn).expect("request");
     let request_type = request.get("type").and_then(Value::as_str).unwrap_or("");
     if let Some(expected) = expected_request {
         assert_eq!(request_type, expected);
+    }
+
+    fn serve_audio_mutation_connection(conn: &OwnedFd, mode: FakeMode) {
+        if matches!(
+            mode,
+            FakeMode::AudioOffOk
+                | FakeMode::AudioOffMicrophoneError
+                | FakeMode::AudioOffMicrophoneProtocolError
+                | FakeMode::AudioOffMicrophoneErrorSpeakerProtocolError
+                | FakeMode::AudioOffSpeakerError
+        ) {
+            serve_audio_off_connection(conn, mode);
+            return;
+        }
+
+        let request = recv_json(conn).expect("audio mutation request");
+        let request_type = request.get("type").and_then(Value::as_str).unwrap_or("");
+        assert_request_shape(&request, request_type, mode);
+        send_json(conn, response_for(mode, request_type)).expect("send audio mutation response");
+    }
+
+    fn serve_audio_off_connection(conn: &OwnedFd, mode: FakeMode) {
+        let microphone = recv_json(conn).expect("microphone mute request");
+        assert_eq!(
+            microphone,
+            json!({
+                "type": "audio",
+                "op": "mute",
+                "args": {
+                    "vm": "corp-vm",
+                    "channel": "microphone",
+                    "mute": true
+                }
+            })
+        );
+        if mode == FakeMode::AudioOffMicrophoneProtocolError {
+            send_payload(conn, b"{not json").expect("send fatal microphone protocol error");
+            return;
+        } else if matches!(
+            mode,
+            FakeMode::AudioOffMicrophoneError
+                | FakeMode::AudioOffMicrophoneErrorSpeakerProtocolError
+        ) {
+            send_json(
+                conn,
+                json!({
+                    "type": "error",
+                    "error": {
+                        "kind": "provider-misconfigured",
+                        "exitCode": 1,
+                        "message": "microphone path failed",
+                        "remediation": "inspect guestd"
+                    }
+                }),
+            )
+            .expect("send microphone error");
+        } else {
+            send_json(
+                conn,
+                json!({
+                    "type": "audioOpResponse",
+                    "op": "mute",
+                    "result": {
+                        "vm": "corp-vm",
+                        "channel": "microphone",
+                        "applied": "host-and-guest",
+                        "state": { "level": 50, "muted": true }
+                    }
+                }),
+            )
+            .expect("send microphone mute response");
+        }
+
+        let speaker = recv_json(conn).expect("speaker mute request");
+        assert_eq!(
+            speaker,
+            json!({
+                "type": "audio",
+                "op": "mute",
+                "args": {
+                    "vm": "corp-vm",
+                    "channel": "speaker",
+                    "mute": true
+                }
+            })
+        );
+        if mode == FakeMode::AudioOffMicrophoneErrorSpeakerProtocolError {
+            send_payload(conn, b"{not json").expect("send fatal speaker protocol error");
+        } else if mode == FakeMode::AudioOffSpeakerError {
+            send_json(
+                conn,
+                json!({
+                    "type": "error",
+                    "error": {
+                        "kind": "provider-misconfigured",
+                        "exitCode": 1,
+                        "message": "speaker path failed",
+                        "remediation": "inspect daemon"
+                    }
+                }),
+            )
+            .expect("send speaker error");
+        } else {
+            send_json(
+                conn,
+                json!({
+                    "type": "audioOpResponse",
+                    "op": "mute",
+                    "result": {
+                        "vm": "corp-vm",
+                        "channel": "speaker",
+                        "applied": "host-and-guest",
+                        "state": { "level": 42, "muted": true }
+                    }
+                }),
+            )
+            .expect("send speaker mute response");
+        }
     }
     assert_request_shape(&request, request_type, mode);
 
@@ -614,20 +972,62 @@ fn assert_request_shape(request: &Value, request_type: &str, mode: FakeMode) {
                 "json": true
             })
         ),
+        "audio" => match mode {
+            FakeMode::AudioMuteOk | FakeMode::AudioError => assert_eq!(
+                request,
+                &json!({
+                    "type": "audio",
+                    "op": "mute",
+                    "args": {
+                        "vm": "corp-vm",
+                        "channel": if mode == FakeMode::AudioMuteOk { "microphone" } else { "speaker" },
+                        "mute": mode == FakeMode::AudioError
+                    }
+                })
+            ),
+            FakeMode::AudioSetVolumeOk | FakeMode::AudioAuthDenied => assert_eq!(
+                request,
+                &json!({
+                    "type": "audio",
+                    "op": "setVolume",
+                    "args": {
+                        "vm": "corp-vm",
+                        "channel": "speaker",
+                        "level": 42
+                    }
+                })
+            ),
+            _ => assert_eq!(
+                request,
+                &json!({
+                    "type": "audio",
+                    "op": "status",
+                    "args": {
+                        "vms": []
+                    }
+                })
+            ),
+        },
         other => panic!("unexpected request type {other}"),
     }
 }
 
 fn response_for(mode: FakeMode, request_type: &str) -> Value {
     match (mode, request_type) {
-        (FakeMode::Refresh, "authStatus") => json!({
+        (
+            FakeMode::Refresh | FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError,
+            "authStatus",
+        ) => json!({
             "type": "authStatusResponse",
             "allowedSubcommands": ["list", "status", "usb probe"],
             "deniedSubcommands": [],
             "role": "admin",
             "sockets": []
         }),
-        (FakeMode::Refresh, "list") => json!({
+        (
+            FakeMode::Refresh | FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError,
+            "list",
+        ) => json!({
             "type": "listResponse",
             "vms": [{
                 "env": "work",
@@ -647,38 +1047,35 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                 "vm": "corp-vm"
             }]
         }),
-        (FakeMode::Refresh, "status") => json!({
-            "type": "statusResponse",
-            "vms": [{
-                "bridgeChecks": [],
-                "env": "work",
-                "lifecycle": {
-                    "pendingRestart": true,
-                    "state": "Running"
-                },
-                "runtime": {
-                    "detail": "running",
-                    "operationCapabilities": {
-                        "lifecycle": { "switch": false },
-                        "media": { "usbHotplug": true },
-                        "guest": { "exec": false },
-                        "storage": { "storeSync": false }
-                    }
-                },
-                "sshUser": "alice",
-                "staticIp": "10.1.0.10",
-                "vm": "corp-vm",
-                "usb": {
-                    "entries": [{
-                        "vm": "corp-vm",
-                        "env": "work",
-                        "busId": "1-2",
-                        "lockPath": "/run/d2b/usbip/corp-vm-1-2.lock",
-                        "status": "bound",
-                        "ownerVm": "corp-vm"
-                    }]
-                }
-            }]
+        (FakeMode::Refresh, "status") => status_response(false),
+        (FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError, "status") => {
+            status_response(true)
+        }
+        (FakeMode::RefreshWithAudio, "audio") => json!({
+            "type": "audioOpResponse",
+            "op": "status",
+            "result": {
+                "entries": [{
+                    "vm": "corp-vm",
+                    "speaker": { "level": 80, "muted": false },
+                    "microphone": { "level": 50, "muted": true },
+                    "providerKind": "local-hypervisor",
+                    "enforcement": "host-and-guest"
+                }],
+                "errors": []
+            }
+        }),
+        (FakeMode::RefreshWithAudioError, "audio") => json!({
+            "type": "audioOpResponse",
+            "op": "status",
+            "result": {
+                "entries": [],
+                "errors": [{
+                    "vm": "corp-vm",
+                    "kind": "provider-misconfigured",
+                    "remediation": "start guestd"
+                }]
+            }
         }),
         (FakeMode::Refresh, "usbipProbe") => json!({
             "type": "usbipProbeResponse",
@@ -720,6 +1117,44 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
         (FakeMode::UsbProbeBrokerError, "usbipProbe") => {
             mutating_response("broker-error", "broker refused", "inspect daemon logs")
         }
+        (FakeMode::AudioMuteOk, "audio") => json!({
+            "type": "audioOpResponse",
+            "op": "mute",
+            "result": {
+                "vm": "corp-vm",
+                "channel": "microphone",
+                "applied": "host-and-guest",
+                "state": { "level": 50, "muted": false }
+            }
+        }),
+        (FakeMode::AudioSetVolumeOk, "audio") => json!({
+            "type": "audioOpResponse",
+            "op": "setVolume",
+            "result": {
+                "vm": "corp-vm",
+                "channel": "speaker",
+                "applied": "host-and-guest",
+                "state": { "level": 42, "muted": false }
+            }
+        }),
+        (FakeMode::AudioAuthDenied, "audio") => json!({
+            "type": "error",
+            "error": {
+                "kind": "authz-not-admin",
+                "exitCode": 10,
+                "message": "requires admin role",
+                "remediation": "join d2b group"
+            }
+        }),
+        (FakeMode::AudioError, "audio") => json!({
+            "type": "error",
+            "error": {
+                "kind": "provider-misconfigured",
+                "exitCode": 1,
+                "message": "guestd is missing",
+                "remediation": "start guestd"
+            }
+        }),
         (_, other) => json!({
             "type": "error",
             "error": {
@@ -802,6 +1237,43 @@ fn send_raw(fd: &OwnedFd, frame: &[u8]) -> io::Result<()> {
             "short seqpacket write",
         ))
     }
+}
+
+fn status_response(audio: bool) -> Value {
+    json!({
+        "type": "statusResponse",
+        "vms": [{
+            "bridgeChecks": [],
+            "env": "work",
+            "lifecycle": {
+                "pendingRestart": true,
+                "state": "Running"
+            },
+            "runtime": {
+                "detail": "running",
+                "operationCapabilities": {
+                    "lifecycle": { "switch": false },
+                    "media": { "usbHotplug": true },
+                    "guest": { "exec": false },
+                    "storage": { "storeSync": false }
+                }
+            },
+            "sshUser": "alice",
+            "staticIp": "10.1.0.10",
+            "features": { "audio": audio },
+            "vm": "corp-vm",
+            "usb": {
+                "entries": [{
+                    "vm": "corp-vm",
+                    "env": "work",
+                    "busId": "1-2",
+                    "lockPath": "/run/d2b/usbip/corp-vm-1-2.lock",
+                    "status": "bound",
+                    "ownerVm": "corp-vm"
+                }]
+            }
+        }]
+    })
 }
 
 fn assert_degraded_refresh(input: &wlcontrol_core::sources::ReduceInput) {

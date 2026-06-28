@@ -16,9 +16,9 @@ silently.
 
 | Action | Default | Min role | Backing surface | Notes |
 | --- | --- | --- | --- | --- |
-| Show declared VMs | on | none | `d2b list` | VM set, env, features, order. |
-| Show per-VM runtime | on | none | `d2b status <vm>` | Runtime/readiness/pending-restart truth. |
-| USB probe | on | none | `d2b usb probe` | Read-only claim/ownership view. |
+| Show declared VMs | on | none | d2bd public socket `list` | VM set, env, features, order. |
+| Show per-VM runtime | on | none | d2bd public socket `status` | Runtime/readiness/pending-restart truth. |
+| USB probe | on | none | d2bd status read model / `usbipProbe` | Read-only claim/ownership view. |
 | Start / Stop / Restart | on | admin | `vm start|stop|restart --apply` | Start and Restart use d2bd `noWaitApi=true` so the UI returns once the VM process is supervised; the normal status refresh shows readiness convergence. Stop is the normal graceful guest-shutdown path when d2b supports it. |
 | Force shutdown | ellipsis-expanded only | admin | pending d2b force-stop socket/CLI contract | Emergency override only; never a primary visible button. Requires destructive styling and a two-click confirmation because it skips graceful guest shutdown. |
 | Store verify | advanced icon | admin | `store verify` | Check live-pool/store integrity. |
@@ -30,7 +30,8 @@ silently.
 | Launch terminal | on | admin | `d2b vm exec -d <vm> -- <guest argv...>` | Admin-only detached guest exec; argv-only. |
 | Custom quick launch | icon row | admin | `d2b vm exec -d <vm> -- <configured argv...>` | Per-VM config-driven icons such as `run-openterface`. |
 | Observability portal | header | none | browser argv + Signoz URL | Opens the URL only; auto-login is not performed. |
-| Audio mic / speaker / off | hidden | — | `d2b audio …` | Not rendered until d2b's audio plane is live. |
+| Audio mic / speaker / off | ellipsis-expanded when reported | admin | d2bd public socket `audio` | Toggles route through d2b's daemon-native audio plane; qemu host-only/provider-degraded states are explained inline. |
+| Speaker volume / mic gain | ellipsis-expanded when reported | admin | d2bd public socket `audio` | Drag sliders preview locally and send one committed mutation on release; arrow keys adjust 5%, PageUp/PageDown adjust 10%. |
 | Host install/destroy/migrate/keys | hidden | — | d2b CLI | Out of scope for a control surface. |
 
 ## Role gating
@@ -40,14 +41,20 @@ silently.
 - `launcher` → build/evaluate.
 - `admin` → lifecycle, USB, store verify, boot/switch, and terminal/guest exec.
 
-## Audio is intentionally hidden
+## Audio controls
 
-d2b's `audio mic|speaker|off|status` verbs currently return a typed
-`not-yet-implemented` envelope, and d2b explicitly has no
-daemon-native audio control plane yet. `d2b-wlcontrol` does not render these
-controls and never edits `audio-state.json` directly. When d2b ships a
-working audio surface, these controls can light up with no privileged-state
-shortcuts.
+`d2b-wlcontrol` consumes `AudioStatus` from the public socket and renders audio
+controls only for VMs that d2b reports as audio-capable. The control center
+shows microphone and speaker toggles plus speaker-volume and mic-gain sliders.
+Muting a channel disables the slider without resetting the stored level, so
+unmuting restores the previous value reported by d2b.
+
+All audio mutations go back through the d2bd public `audio` operation. The
+control center never talks to the broker, never uses `sudo`, and never reads or
+writes `audio-state.json` directly. Provider-specific states are rendered as
+operator-facing badges: qemu host-only enforcement remains controllable when
+d2b supports the host side, while unsupported, provider-misconfigured, or
+degraded entries stay disabled with d2b's remediation text.
 
 The control center renders this matrix with auth-aware gating: blocked
 actions are disabled with a tooltip explaining why, VM quick actions are

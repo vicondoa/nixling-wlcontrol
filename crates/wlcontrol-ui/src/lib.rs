@@ -310,6 +310,8 @@ ShellRoot {
     if (vm.state && vm.state !== "unknown") parts.push(vm.state)
     if (vm.staticIp) parts.push(vm.staticIp)
     if (vm.pendingRestart) parts.push("pending restart")
+    const audio = root.audioBadge(vm)
+    if (audio.length > 0) parts.push(audio)
     return parts.join(" · ")
   }
 
@@ -406,6 +408,69 @@ ShellRoot {
     return canAdminMutate() && hasCapability(vm, "usbHotplug") && (!u.ownerVm || u.ownerVm === vm.name)
   }
 
+  function hasAudio(vm) {
+    return !!(vm && vm.audio)
+  }
+
+  function canAudio(vm) {
+    return canAdminMutate() && hasAudio(vm) && vm.audio.enforcement !== "unsupported" && vm.audio.enforcement !== "unknown" && !vm.audio.errorKind
+  }
+
+  function audioDisabledReason(vm) {
+    if (!hasAudio(vm)) return "Audio status is not available from this d2b generation"
+    if (vm.audio.errorKind) return vm.audio.remediation || ("Audio unavailable: " + vm.audio.errorKind)
+    if (vm.audio.enforcement === "unsupported") return "Audio controls are unsupported for this VM runtime"
+    if (state.connectivity !== "connected") return "d2bd is unreachable"
+    if (state.role !== "admin") return "Requires admin role"
+    if (busy) return "Action in progress"
+    return "Unavailable"
+  }
+
+  function audioBadge(vm) {
+    if (!hasAudio(vm)) return ""
+    if (vm.audio.errorKind) return "audio issue"
+    if (vm.audio.microphone && !vm.audio.microphone.muted) return "hot mic"
+    if (vm.audio.enforcement === "host-only") return "host-only audio"
+    if (vm.audio.enforcement === "guest-only") return "guest-only audio"
+    if (vm.audio.enforcement === "unsupported" || vm.audio.enforcement === "unknown") return "audio unsupported"
+    return ""
+  }
+
+  function audioLevel(channel, fallback) {
+    if (!channel || channel.level === undefined || channel.level === null) return fallback
+    return root.clamp(channel.level, 0, 100)
+  }
+
+  function audioLevelAction(vm, channelName, level) {
+    const safe = String(Math.round(root.clamp(level, 0, 100)))
+    if (channelName === "speaker") root.action(["audio-speaker-volume", vm.name, safe])
+    else root.action(["audio-mic-gain", vm.name, safe])
+  }
+
+  function audioToggleAction(vm, channelName, muted) {
+    const next = muted ? "on" : "off"
+    if (channelName === "speaker") root.action(["audio-speaker", vm.name, next])
+    else root.action(["audio-mic", vm.name, next])
+  }
+
+  function audioTooltip(vm) {
+    if (!hasAudio(vm)) return root.audioDisabledReason(vm)
+    const a = vm.audio
+    const parts = ["Audio " + a.enforcement]
+    parts.push("speaker " + (a.speaker.muted ? "off" : "on") + " " + root.audioLevel(a.speaker, 80) + "%")
+    parts.push("mic " + (a.microphone.muted ? "off" : "on") + " gain " + root.audioLevel(a.microphone, 50) + "%")
+    if (a.remediation) parts.push(a.remediation)
+    return parts.join(" · ")
+  }
+
+  function audioSliderTooltip(vm, channelName) {
+    if (!hasAudio(vm)) return root.audioDisabledReason(vm)
+    const channel = channelName === "speaker" ? vm.audio.speaker : vm.audio.microphone
+    if (channel && channel.muted) return channelName === "speaker" ? "Speaker is off; turn speaker on to adjust volume" : "Microphone is off; turn mic on to adjust gain"
+    if (!root.canAudio(vm)) return root.audioDisabledReason(vm)
+    return channelName === "speaker" ? "Speaker playback volume; sends on release" : "Microphone input gain; sends on release"
+  }
+
   function usbLabel(u) {
     if (u.ownerVm && u.ownerVm !== u.vm) return "owned " + u.ownerVm
     if (u.busId === "pending") return u.bound ? "detach USB" : "attach USB"
@@ -442,6 +507,11 @@ ShellRoot {
     const vm = args[1] || ""
     if (verb === "usb-attach") return "Attaching USB to " + vm + "..."
     if (verb === "usb-detach") return "Detaching USB from " + vm + "..."
+    if (verb === "audio-mic") return "Updating microphone for " + vm + "..."
+    if (verb === "audio-speaker") return "Updating speaker for " + vm + "..."
+    if (verb === "audio-speaker-volume") return "Updating speaker volume for " + vm + "..."
+    if (verb === "audio-mic-gain") return "Updating microphone gain for " + vm + "..."
+    if (verb === "audio-off") return "Disabling audio for " + vm + "..."
     if (verb === "terminal") return "Opening terminal in " + vm + "..."
     if (verb === "quick-launch") return "Launching " + (args[2] || "command") + " in " + vm + "..."
     if (verb === "build") return "Building " + vm + "..."
@@ -461,6 +531,11 @@ ShellRoot {
     const vm = args[1] || ""
     if (verb === "usb-attach") return "USB attached to " + vm
     if (verb === "usb-detach") return "USB detached from " + vm
+    if (verb === "audio-mic") return "Microphone updated for " + vm
+    if (verb === "audio-speaker") return "Speaker updated for " + vm
+    if (verb === "audio-speaker-volume") return "Speaker volume updated for " + vm
+    if (verb === "audio-mic-gain") return "Microphone gain updated for " + vm
+    if (verb === "audio-off") return "Audio disabled for " + vm
     if (verb === "terminal") return "Terminal launch requested for " + vm
     if (verb === "quick-launch") return "Quick launch requested for " + vm
     if (verb === "build") return "Build completed for " + vm
@@ -893,6 +968,71 @@ ShellRoot {
                     IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin", "switch"); accent: "#6c7086"; enabled: root.canAdvanced(vm, "switch"); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
                   }
 
+                  Column {
+                    id: audioControls
+                    visible: expanded && root.hasAudio(vm)
+                    width: parent.width
+                    height: visible ? implicitHeight : 0
+                    spacing: 6
+
+                    Row {
+                      width: parent.width
+                      spacing: 6
+                      ControlChip {
+                        icon: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? "mic" : "mic_off"
+                        label: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? "mic on" : "mic off"
+                        tooltip: enabled ? root.audioTooltip(vm) : root.audioDisabledReason(vm)
+                        accent: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? root.stateColor("running") : "#6c7086"
+                        enabled: root.canAudio(vm)
+                        onClicked: root.audioToggleAction(vm, "microphone", vm.audio.microphone.muted)
+                      }
+                      ControlChip {
+                        icon: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? "volume_up" : "volume_off"
+                        label: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? "speaker on" : "speaker off"
+                        tooltip: enabled ? root.audioTooltip(vm) : root.audioDisabledReason(vm)
+                        accent: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? root.stateColor("running") : "#6c7086"
+                        enabled: root.canAudio(vm)
+                        onClicked: root.audioToggleAction(vm, "speaker", vm.audio.speaker.muted)
+                      }
+                      ControlChip {
+                        icon: "no_sound"
+                        label: "audio off"
+                        tooltip: enabled ? ("Disable microphone and speaker for " + vm.name) : root.audioDisabledReason(vm)
+                        accent: root.stateColor("error")
+                        enabled: root.canAudio(vm)
+                        onClicked: root.action(["audio-off", vm.name])
+                      }
+                      Rectangle {
+                        visible: root.audioBadge(vm).length > 0
+                        height: 24
+                        width: audioBadgeText.width + 18
+                        radius: 999
+                        color: "#2e2a1a"
+                        Text { id: audioBadgeText; anchors.centerIn: parent; color: vm.audio && (vm.audio.errorKind || root.audioBadge(vm) === "hot mic") ? root.stateColor("error") : root.stateColor("pendingRestart"); font.pixelSize: 10; font.bold: true; text: root.audioBadge(vm) }
+                      }
+                    }
+
+                    AudioSlider {
+                      width: parent.width
+                      icon: "volume_up"
+                      label: "speaker"
+                      value: root.audioLevel(vm.audio ? vm.audio.speaker : null, 80)
+                      enabled: root.canAudio(vm) && vm.audio && vm.audio.speaker && !vm.audio.speaker.muted
+                      tooltip: root.audioSliderTooltip(vm, "speaker")
+                      onCommitted: (level) => root.audioLevelAction(vm, "speaker", level)
+                    }
+
+                    AudioSlider {
+                      width: parent.width
+                      icon: "mic"
+                      label: "mic gain"
+                      value: root.audioLevel(vm.audio ? vm.audio.microphone : null, 50)
+                      enabled: root.canAudio(vm) && vm.audio && vm.audio.microphone && !vm.audio.microphone.muted
+                      tooltip: root.audioSliderTooltip(vm, "microphone")
+                      onCommitted: (level) => root.audioLevelAction(vm, "microphone", level)
+                    }
+                  }
+
                   Flow {
                     id: destructiveControls
                     visible: expanded
@@ -1090,6 +1230,139 @@ ShellRoot {
     }
   }
 
+  component AudioSlider: Rectangle {
+    id: audioSlider
+    property string icon: ""
+    property string label: ""
+    property int value: 0
+    property string tooltip: ""
+    property int draftValue: value
+    property bool dragging: false
+    signal committed(int level)
+
+    height: 30
+    radius: 10
+    activeFocusOnTab: true
+    opacity: enabled ? 1.0 : 0.34
+    color: "#0d0d0d"
+    border.color: activeFocus ? root.hostAccentColor() : "#2a2d35"
+    border.width: 1
+    Keys.onLeftPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue - 5, 0, 100); commitTimer.restart() }
+    Keys.onRightPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue + 5, 0, 100); commitTimer.restart() }
+    Keys.onPageDownPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue - 10, 0, 100); commitTimer.restart() }
+    Keys.onPageUpPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue + 10, 0, 100); commitTimer.restart() }
+
+    onValueChanged: if (!dragging && !commitTimer.running) draftValue = value
+    onEnabledChanged: if (!enabled) { commitTimer.stop(); dragging = false; draftValue = value }
+
+    Timer {
+      id: commitTimer
+      interval: 350
+      repeat: false
+      onTriggered: if (audioSlider.enabled) committed(draftValue)
+    }
+
+    Text {
+      id: sliderIcon
+      anchors.left: parent.left
+      anchors.leftMargin: 8
+      anchors.verticalCenter: parent.verticalCenter
+      width: 18
+      color: "#cdd6f4"
+      font.family: "Material Symbols Rounded"
+      font.pixelSize: 16
+      horizontalAlignment: Text.AlignHCenter
+      text: parent.icon
+    }
+    Text {
+      id: sliderLabel
+      anchors.left: sliderIcon.right
+      anchors.leftMargin: 6
+      anchors.verticalCenter: parent.verticalCenter
+      width: 70
+      color: "#cdd6f4"
+      font.pixelSize: 11
+      font.bold: true
+      elide: Text.ElideRight
+      text: parent.label
+    }
+    Rectangle {
+      id: sliderTrack
+      anchors.left: sliderLabel.right
+      anchors.leftMargin: 6
+      anchors.right: sliderValue.left
+      anchors.rightMargin: 8
+      anchors.verticalCenter: parent.verticalCenter
+      height: 6
+      radius: 999
+      color: "#252832"
+      Rectangle {
+        width: parent.width * (parent.parent.draftValue / 100)
+        height: parent.height
+        radius: 999
+        color: root.hostAccentColor()
+      }
+      Rectangle {
+        width: 12
+        height: 12
+        radius: 999
+        x: root.clamp(parent.width * (parent.parent.draftValue / 100) - width / 2, 0, parent.width - width)
+        anchors.verticalCenter: parent.verticalCenter
+        color: "#ffffff"
+      }
+    }
+    Text {
+      id: sliderValue
+      anchors.right: parent.right
+      anchors.rightMargin: 8
+      anchors.verticalCenter: parent.verticalCenter
+      width: 36
+      color: "#9399b2"
+      font.pixelSize: 11
+      horizontalAlignment: Text.AlignRight
+      text: parent.draftValue + "%"
+    }
+
+    MouseArea {
+      id: sliderMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      preventStealing: true
+      onPressed: (mouse) => {
+        if (!parent.enabled) return
+        parent.forceActiveFocus()
+        if (mouse.x < sliderTrack.x || mouse.x > sliderTrack.x + sliderTrack.width) return
+        commitTimer.stop()
+        parent.dragging = true
+        updateDraft(mouse.x)
+      }
+      onPositionChanged: (mouse) => {
+        if (parent.dragging) updateDraft(mouse.x)
+      }
+      onReleased: {
+        if (parent.dragging) {
+          commitTimer.stop()
+          if (parent.enabled) parent.committed(parent.draftValue)
+        }
+        parent.dragging = false
+      }
+      onCanceled: {
+        if (parent.dragging) {
+          commitTimer.stop()
+          parent.draftValue = parent.value
+        }
+        parent.dragging = false
+      }
+      onContainsMouseChanged: root.hoverHint = containsMouse ? parent.tooltip : ""
+      function updateDraft(x) {
+        if (!parent.enabled) return
+        const left = sliderTrack.x
+        const pct = (x - left) / Math.max(1, sliderTrack.width)
+        parent.draftValue = Math.round(root.clamp(pct, 0, 1) * 100)
+      }
+    }
+  }
+
   component ControlChip: Rectangle {
     property string icon: ""
     property string label: ""
@@ -1100,10 +1373,13 @@ ShellRoot {
     height: 24
     width: chipRow.implicitWidth + 16
     radius: 999
+    activeFocusOnTab: true
     opacity: enabled ? 1.0 : 0.34
     color: mouse.containsMouse && enabled ? Qt.rgba(accent.r, accent.g, accent.b, 0.15) : Qt.rgba(accent.r, accent.g, accent.b, enabled ? 0.085 : 0.045)
-    border.color: Qt.rgba(accent.r, accent.g, accent.b, enabled ? 0.18 : 0.10)
+    border.color: activeFocus ? root.hostAccentColor() : Qt.rgba(accent.r, accent.g, accent.b, enabled ? 0.18 : 0.10)
     border.width: 1
+    Keys.onSpacePressed: if (enabled) clicked()
+    Keys.onReturnPressed: if (enabled) clicked()
 
     Row {
       id: chipRow
@@ -1192,6 +1468,9 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("Force shutdown is waiting for d2b force-stop support"));
         assert!(QML_SOURCE.contains("Requesting graceful stop"));
         assert!(QML_SOURCE.contains("skipping graceful guest shutdown"));
+        assert!(QML_SOURCE.contains("return \"hot mic\""));
+        assert!(QML_SOURCE.contains("Speaker is off; turn speaker on to adjust volume"));
+        assert!(QML_SOURCE.contains("if (parent.dragging) {"));
         let primary_start = QML_SOURCE
             .find("id: actionButtons")
             .expect("primary controls");

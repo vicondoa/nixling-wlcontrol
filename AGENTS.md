@@ -20,9 +20,8 @@ center for [d2b](https://github.com/vicondoa/d2b) microVMs,
 built for a niri / Wayland desktop. It shows which VMs are running and
 their status, and exposes the controls a d2b operator can already
 drive: lifecycle (start / stop / restart / switch), USB attach/detach,
-launching a terminal into a VM, and store verification. Audio (mic /
-speaker) controls are designed but disabled until d2b ships a
-daemon-native audio control plane.
+launching a terminal into a VM, store verification, and d2b daemon-native
+audio controls (mic/speaker toggles plus speaker volume / mic gain).
 
 It is **not** a d2b replacement, a VM manager, or a privileged
 tool. It is a thin, memory-safe (Rust) presentation + control surface
@@ -227,9 +226,9 @@ skip the gate unless the doc describes load-bearing behavior.
   no `interval` on the self-looping module; stable CSS classes only.
 - **Quickshell popup.** Fixed-size layer-shell surface; no XWayland
   assumptions; `open` toggles show/hide from Waybar.
-- **Audio.** Keep mic/speaker controls hidden or disabled until d2b's
-  `audio` CLI/socket surface returns success — do not mutate audio state files
-  directly.
+- **Audio.** Use only d2b's public `audio` socket surface for status and
+  mutations. Keep controls disabled with a clear reason when d2b does not
+  report audio for a VM; do not mutate audio state files directly.
 
 ## Versioning & changelog
 
@@ -267,8 +266,8 @@ to.
 - **Don't infer authorization from filesystem permissions** — use
   `d2b auth status`.
 - **Don't assume XWayland.** Target Wayland/niri natively.
-- **Don't imply audio mic/speaker state is controllable** until
-  d2b's audio plane is live.
+- **Don't bypass d2b audio controls.** Use the public `audio` socket surface;
+  never edit guest or host audio state directly.
 - **Don't add a new linter/formatter/pre-commit hook** beyond
   `cargo fmt` / `cargo clippy` / `nix flake check` without being asked.
 - **Don't leak internal process markers** (wave/finding tags) into

@@ -10,7 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AuthRole, Connectivity, RuntimeState, UsbClaim, VmCapabilities, VmFeatures};
+use crate::model::{
+    AuthRole, Connectivity, RuntimeState, UsbClaim, VmAudioState, VmCapabilities, VmFeatures,
+};
 
 /// One declared VM as reported by `d2b list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +63,31 @@ pub struct UsbProbe {
     pub claims: Vec<UsbClaim>,
 }
 
+/// Audio status from `d2b audio status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioStatus {
+    pub entries: Vec<AudioStatusEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<AudioStatusError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioStatusEntry {
+    pub vm: String,
+    pub audio: VmAudioState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioStatusError {
+    pub vm: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+}
+
 /// Authorization posture from `d2b auth status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -86,4 +113,6 @@ pub struct ReduceInput {
     pub statuses: Vec<VmStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usb: Option<UsbProbe>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioStatus>,
 }

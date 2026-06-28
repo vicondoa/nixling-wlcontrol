@@ -7,19 +7,12 @@
 
 use crate::config::Config;
 use crate::model::{
-    ActionAvailability, ActionKind, AuthRole, Connectivity, PlannedAction, RuntimeState,
-    SocketIntent, Unavailable, Vm, WlState,
+    ActionAvailability, ActionKind, AudioChannel, AudioEnforcementPosture, AuthRole, Connectivity,
+    PlannedAction, RuntimeState, SocketIntent, Unavailable, Vm, WlState,
 };
 
 /// Returns `Some(reason)` when `action` cannot currently be invoked.
 pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable> {
-    if matches!(
-        action,
-        ActionKind::AudioMic { .. } | ActionKind::AudioSpeaker { .. } | ActionKind::AudioOff { .. }
-    ) {
-        return Some(Unavailable::NotYetImplemented);
-    }
-
     // Display-only actions are always available.
     match action {
         ActionKind::OpenControlCenter
@@ -67,6 +60,19 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
             }),
         ActionKind::UsbAttach { vm, bus_id } => usb_attach_block(state, vm, bus_id),
         ActionKind::UsbDetach { vm, bus_id } => usb_detach_block(state, vm, bus_id),
+        ActionKind::AudioSpeakerVolume { level_percent, .. }
+        | ActionKind::AudioMicGain { level_percent, .. }
+            if *level_percent > 100 =>
+        {
+            Some(Unavailable::Blocked {
+                detail: "audio level must be between 0 and 100".into(),
+            })
+        }
+        ActionKind::AudioMic { vm, .. }
+        | ActionKind::AudioSpeaker { vm, .. }
+        | ActionKind::AudioSpeakerVolume { vm, .. }
+        | ActionKind::AudioMicGain { vm, .. }
+        | ActionKind::AudioOff { vm } => audio_block(state, vm),
         ActionKind::StoreVerify { .. } | ActionKind::Build { .. } | ActionKind::Boot { .. } => None,
         _ => None,
     }
@@ -89,6 +95,11 @@ fn capability_block(action: &ActionKind, state: &WlState) -> Option<Unavailable>
         ActionKind::LaunchTerminal { .. } | ActionKind::QuickLaunch { .. } => {
             target.capabilities.terminal
         }
+        ActionKind::AudioMic { .. }
+        | ActionKind::AudioSpeaker { .. }
+        | ActionKind::AudioSpeakerVolume { .. }
+        | ActionKind::AudioMicGain { .. }
+        | ActionKind::AudioOff { .. } => target.features.audio || target.audio.is_some(),
         _ => true,
     };
     (!supported).then(|| Unavailable::Blocked {
@@ -112,6 +123,8 @@ fn action_target_vm(action: &ActionKind) -> Option<&str> {
         | ActionKind::LaunchTerminal { vm }
         | ActionKind::AudioMic { vm, .. }
         | ActionKind::AudioSpeaker { vm, .. }
+        | ActionKind::AudioSpeakerVolume { vm, .. }
+        | ActionKind::AudioMicGain { vm, .. }
         | ActionKind::AudioOff { vm } => Some(vm.as_str()),
         ActionKind::Refresh
         | ActionKind::OpenControlCenter
@@ -147,17 +160,27 @@ pub fn vm_actions(state: &WlState, config: &Config, vm: &str) -> Vec<ActionAvail
         }
     }
 
-    actions.extend([
-        ActionKind::AudioMic {
-            vm: vm.into(),
-            on: true,
-        },
-        ActionKind::AudioSpeaker {
-            vm: vm.into(),
-            on: true,
-        },
-        ActionKind::AudioOff { vm: vm.into() },
-    ]);
+    if running_vm(state, vm).is_some_and(|target| target.features.audio || target.audio.is_some()) {
+        actions.extend([
+            ActionKind::AudioMic {
+                vm: vm.into(),
+                on: true,
+            },
+            ActionKind::AudioSpeaker {
+                vm: vm.into(),
+                on: true,
+            },
+            ActionKind::AudioSpeakerVolume {
+                vm: vm.into(),
+                level_percent: 80,
+            },
+            ActionKind::AudioMicGain {
+                vm: vm.into(),
+                level_percent: 50,
+            },
+            ActionKind::AudioOff { vm: vm.into() },
+        ]);
+    }
 
     actions
         .into_iter()
@@ -205,9 +228,29 @@ pub fn plan(
         ActionKind::LaunchTerminal { vm } => terminal_argv(vm, config),
         ActionKind::QuickLaunch { vm, id } => quick_launch_argv(vm, id, config)?,
         ActionKind::OpenObservability => observability_argv(config),
-        ActionKind::AudioMic { .. }
-        | ActionKind::AudioSpeaker { .. }
-        | ActionKind::AudioOff { .. } => return Err(Unavailable::NotYetImplemented),
+        ActionKind::AudioMic { vm, on } => socket(SocketIntent::AudioMute {
+            vm: vm.clone(),
+            channel: AudioChannel::Microphone,
+            mute: !on,
+        }),
+        ActionKind::AudioSpeaker { vm, on } => socket(SocketIntent::AudioMute {
+            vm: vm.clone(),
+            channel: AudioChannel::Speaker,
+            mute: !on,
+        }),
+        ActionKind::AudioSpeakerVolume { vm, level_percent } => {
+            socket(SocketIntent::AudioSetVolume {
+                vm: vm.clone(),
+                channel: AudioChannel::Speaker,
+                level_percent: *level_percent,
+            })
+        }
+        ActionKind::AudioMicGain { vm, level_percent } => socket(SocketIntent::AudioSetVolume {
+            vm: vm.clone(),
+            channel: AudioChannel::Microphone,
+            level_percent: *level_percent,
+        }),
+        ActionKind::AudioOff { vm } => socket(SocketIntent::AudioOff { vm: vm.clone() }),
         ActionKind::OpenControlCenter | ActionKind::CycleDisplay => {
             // These are handled in-process by the UI/Waybar layers, not as a
             // d2b dispatch; planning them is a no-op socket refresh.
@@ -275,10 +318,40 @@ fn required_role(action: &ActionKind) -> AuthRole {
         | ActionKind::Boot { .. }
         | ActionKind::UsbAttach { .. }
         | ActionKind::UsbDetach { .. }
-        | ActionKind::StoreVerify { .. } => AuthRole::Admin,
+        | ActionKind::StoreVerify { .. }
+        | ActionKind::AudioMic { .. }
+        | ActionKind::AudioSpeaker { .. }
+        | ActionKind::AudioSpeakerVolume { .. }
+        | ActionKind::AudioMicGain { .. }
+        | ActionKind::AudioOff { .. } => AuthRole::Admin,
         ActionKind::Build { .. } => AuthRole::Launcher,
         _ => AuthRole::None,
     }
+}
+
+fn audio_block(state: &WlState, vm: &str) -> Option<Unavailable> {
+    let target = running_vm(state, vm)?;
+    let Some(audio) = &target.audio else {
+        return Some(Unavailable::Blocked {
+            detail: "audio status is not available from this d2b generation".into(),
+        });
+    };
+    if let Some(kind) = &audio.error_kind {
+        let detail = audio.remediation.as_ref().map_or_else(
+            || format!("audio unavailable: {kind}"),
+            |remediation| format!("audio unavailable: {kind}; {remediation}"),
+        );
+        return Some(Unavailable::Blocked { detail });
+    }
+    if matches!(
+        audio.enforcement,
+        AudioEnforcementPosture::Unsupported | AudioEnforcementPosture::Unknown
+    ) {
+        return Some(Unavailable::Blocked {
+            detail: "audio controls are unsupported for this VM runtime".into(),
+        });
+    }
+    None
 }
 
 fn role_satisfies(have: AuthRole, need: AuthRole) -> bool {
@@ -404,6 +477,7 @@ fn observability_argv(config: &Config) -> PlannedAction {
 mod tests {
     use super::*;
     use crate::model::UsbClaim;
+    use crate::model::{AudioChannelState, AudioProviderKind, VmAudioState};
 
     fn connected_state(role: AuthRole, vms: Vec<Vm>) -> WlState {
         WlState {
@@ -708,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn audio_actions_are_not_yet_implemented_even_when_daemon_is_down() {
+    fn audio_actions_require_daemon_connectivity() {
         let state = WlState {
             connectivity: Connectivity::DaemonDown,
             ..Default::default()
@@ -730,18 +804,136 @@ mod tests {
         for action in actions {
             assert!(matches!(
                 block_reason(&action, &state),
-                Some(Unavailable::NotYetImplemented)
+                Some(Unavailable::DaemonDown)
             ));
             assert!(matches!(
                 plan(&action, &state, &Config::default()),
-                Err(Unavailable::NotYetImplemented)
+                Err(Unavailable::DaemonDown)
             ));
         }
+    }
+
+    fn audio_state() -> VmAudioState {
+        VmAudioState {
+            speaker: AudioChannelState {
+                level: Some(80),
+                muted: false,
+            },
+            microphone: AudioChannelState {
+                level: Some(50),
+                muted: true,
+            },
+            provider_kind: AudioProviderKind::LocalHypervisor,
+            enforcement: AudioEnforcementPosture::HostAndGuest,
+            error_kind: None,
+            remediation: None,
+        }
+    }
+
+    #[test]
+    fn audio_actions_block_on_bad_posture_and_levels() {
+        let mut target = vm("corp-vm", RuntimeState::Running);
+        target.features.audio = true;
+        target.audio = Some(audio_state());
+        let state = connected_state(AuthRole::Admin, vec![target.clone()]);
+
+        let too_high = ActionKind::AudioSpeakerVolume {
+            vm: "corp-vm".into(),
+            level_percent: 101,
+        };
+        assert!(matches!(
+            plan(&too_high, &state, &Config::default()),
+            Err(Unavailable::Blocked { detail }) if detail.contains("between 0 and 100")
+        ));
+
+        let mut unsupported = target.clone();
+        unsupported.audio.as_mut().expect("audio").enforcement =
+            AudioEnforcementPosture::Unsupported;
+        let unsupported_state = connected_state(AuthRole::Admin, vec![unsupported]);
+        assert!(matches!(
+            plan(
+                &ActionKind::AudioMic {
+                    vm: "corp-vm".into(),
+                    on: false,
+                },
+                &unsupported_state,
+                &Config::default()
+            ),
+            Err(Unavailable::Blocked { detail }) if detail.contains("unsupported")
+        ));
+
+        let mut errored = target;
+        let audio = errored.audio.as_mut().expect("audio");
+        audio.error_kind = Some("provider-misconfigured".into());
+        audio.remediation = Some("start guestd".into());
+        let errored_state = connected_state(AuthRole::Admin, vec![errored]);
+        assert!(matches!(
+            plan(
+                &ActionKind::AudioSpeaker {
+                    vm: "corp-vm".into(),
+                    on: true,
+                },
+                &errored_state,
+                &Config::default()
+            ),
+            Err(Unavailable::Blocked { detail })
+                if detail.contains("provider-misconfigured") && detail.contains("start guestd")
+        ));
+    }
+
+    #[test]
+    fn audio_actions_plan_to_public_socket_intents() {
+        let mut target = vm("corp-vm", RuntimeState::Running);
+        target.features.audio = true;
+        target.audio = Some(audio_state());
+        let state = connected_state(AuthRole::Admin, vec![target]);
+
+        let planned = plan(
+            &ActionKind::AudioMic {
+                vm: "corp-vm".into(),
+                on: false,
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect("planned");
+        assert_eq!(
+            planned,
+            PlannedAction::Socket {
+                intent: SocketIntent::AudioMute {
+                    vm: "corp-vm".into(),
+                    channel: AudioChannel::Microphone,
+                    mute: true,
+                }
+            }
+        );
+
+        let planned = plan(
+            &ActionKind::AudioMicGain {
+                vm: "corp-vm".into(),
+                level_percent: 33,
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect("planned");
+        assert_eq!(
+            planned,
+            PlannedAction::Socket {
+                intent: SocketIntent::AudioSetVolume {
+                    vm: "corp-vm".into(),
+                    channel: AudioChannel::Microphone,
+                    level_percent: 33,
+                }
+            }
+        );
     }
 
     #[test]
     fn vm_actions_returns_lifecycle_usb_terminal_store_and_audio() {
         let mut target = vm("corp-vm", RuntimeState::Running);
+        target.features.audio = true;
+        target.audio = Some(audio_state());
         target.usb.push(UsbClaim {
             vm: "corp-vm".into(),
             env: "work".into(),
@@ -753,7 +945,7 @@ mod tests {
 
         let actions = vm_actions(&state, &Config::default(), "corp-vm");
 
-        assert_eq!(actions.len(), 14);
+        assert_eq!(actions.len(), 16);
         assert!(matches!(&actions[0].action, ActionKind::Start { .. }));
         assert!(matches!(&actions[1].action, ActionKind::Stop { .. }));
         assert!(matches!(&actions[2].action, ActionKind::ForceStop { .. }));
@@ -763,23 +955,21 @@ mod tests {
         assert!(matches!(&actions[9].action, ActionKind::UsbAttach { .. }));
         assert!(matches!(&actions[10].action, ActionKind::UsbDetach { .. }));
         assert!(matches!(&actions[11].action, ActionKind::AudioMic { .. }));
-        assert!(matches!(
-            actions[11].unavailable.as_ref(),
-            Some(Unavailable::NotYetImplemented)
-        ));
+        assert!(actions[11].unavailable.is_none());
         assert!(matches!(
             &actions[12].action,
             ActionKind::AudioSpeaker { .. }
         ));
+        assert!(actions[12].unavailable.is_none());
         assert!(matches!(
-            actions[12].unavailable.as_ref(),
-            Some(Unavailable::NotYetImplemented)
+            &actions[13].action,
+            ActionKind::AudioSpeakerVolume { .. }
         ));
-        assert!(matches!(&actions[13].action, ActionKind::AudioOff { .. }));
         assert!(matches!(
-            actions[13].unavailable.as_ref(),
-            Some(Unavailable::NotYetImplemented)
+            &actions[14].action,
+            ActionKind::AudioMicGain { .. }
         ));
+        assert!(matches!(&actions[15].action, ActionKind::AudioOff { .. }));
     }
 
     #[test]

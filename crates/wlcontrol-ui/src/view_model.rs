@@ -93,6 +93,10 @@ pub(crate) fn action_label(action: &ActionKind) -> String {
         ActionKind::QuickLaunch { id, .. } => format!("Quick launch {id}"),
         ActionKind::AudioMic { .. } => "Mic".to_owned(),
         ActionKind::AudioSpeaker { .. } => "Speaker".to_owned(),
+        ActionKind::AudioSpeakerVolume { level_percent, .. } => {
+            format!("Speaker volume {level_percent}%")
+        }
+        ActionKind::AudioMicGain { level_percent, .. } => format!("Mic gain {level_percent}%"),
         ActionKind::AudioOff { .. } => "Audio off".to_owned(),
         ActionKind::OpenControlCenter => "Open control center".to_owned(),
         ActionKind::OpenObservability => "Open observability".to_owned(),
@@ -132,6 +136,8 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
         | ActionKind::LaunchTerminal { vm }
         | ActionKind::AudioMic { vm, .. }
         | ActionKind::AudioSpeaker { vm, .. }
+        | ActionKind::AudioSpeakerVolume { vm, .. }
+        | ActionKind::AudioMicGain { vm, .. }
         | ActionKind::AudioOff { vm } => Some(vm.as_str()),
         ActionKind::Refresh
         | ActionKind::OpenControlCenter
@@ -228,6 +234,7 @@ mod tests {
             static_ip: None,
             readiness: vec![],
             usb: vec![],
+            audio: None,
             quick_launch: vec![],
         }
     }
@@ -345,6 +352,20 @@ mod tests {
             }),
             "Quick launch run-openterface"
         );
+        assert_eq!(
+            action_label(&ActionKind::AudioSpeakerVolume {
+                vm: "corp-vm".to_owned(),
+                level_percent: 42,
+            }),
+            "Speaker volume 42%"
+        );
+        assert_eq!(
+            action_label(&ActionKind::AudioMicGain {
+                vm: "corp-vm".to_owned(),
+                level_percent: 65,
+            }),
+            "Mic gain 65%"
+        );
     }
 
     #[test]
@@ -358,6 +379,13 @@ mod tests {
         assert_eq!(
             action_vm_name(&ActionKind::Boot {
                 vm: "corp-vm".to_owned()
+            }),
+            Some("corp-vm")
+        );
+        assert_eq!(
+            action_vm_name(&ActionKind::AudioMicGain {
+                vm: "corp-vm".to_owned(),
+                level_percent: 55,
             }),
             Some("corp-vm")
         );

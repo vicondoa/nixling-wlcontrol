@@ -78,9 +78,8 @@ pub struct VmFeatures {
     pub graphics: bool,
     pub tpm: bool,
     pub usbip: bool,
-    /// True when the VM declares `audio.enable`. Audio *control* is still
-    /// unavailable until d2b ships a daemon-native audio plane; this flag
-    /// only drives the disabled-with-reason affordance.
+    /// True when the VM declares `audio.enable`. Controls are enabled only
+    /// after d2b also reports live audio status for the VM.
     pub audio: bool,
 }
 
@@ -113,6 +112,58 @@ impl Default for VmCapabilities {
             terminal: true,
         }
     }
+}
+
+/// The audio channel represented by a d2b audio operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioChannel {
+    Speaker,
+    Microphone,
+}
+
+/// Provider backing a VM's audio controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioProviderKind {
+    LocalHypervisor,
+    QemuMedia,
+    AcaSandbox,
+    Unknown,
+}
+
+/// Enforcement posture reported by d2b for a VM's audio controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioEnforcementPosture {
+    HostAndGuest,
+    HostOnly,
+    GuestOnly,
+    Unsupported,
+    Unknown,
+}
+
+/// Per-channel audio state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioChannelState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<u16>,
+    pub muted: bool,
+}
+
+/// Per-VM audio state and provider posture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VmAudioState {
+    pub speaker: AudioChannelState,
+    pub microphone: AudioChannelState,
+    pub provider_kind: AudioProviderKind,
+    pub enforcement: AudioEnforcementPosture,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
 }
 
 /// A custom per-VM quick-launch icon surfaced by the popup.
@@ -159,6 +210,9 @@ pub struct Vm {
     /// USB claims associated with this VM.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usb: Vec<UsbClaim>,
+    /// Audio status and controls, when d2b reports them for this VM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<VmAudioState>,
     /// Configured custom quick-launch icons for this VM.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quick_launch: Vec<QuickLaunchIcon>,
@@ -223,7 +277,13 @@ impl WlState {
         self.vms
             .iter()
             .filter(|v| !v.is_net_vm && !v.hidden)
-            .any(|v| v.pending_restart || v.state == RuntimeState::Unknown)
+            .any(|v| {
+                v.pending_restart
+                    || v.state == RuntimeState::Unknown
+                    || v.audio
+                        .as_ref()
+                        .is_some_and(|audio| audio.error_kind.is_some() || !audio.microphone.muted)
+            })
     }
 }
 
@@ -258,11 +318,15 @@ pub enum ActionKind {
     LaunchTerminal { vm: String },
     /// Run a configured custom guest quick-launch command.
     QuickLaunch { vm: String, id: String },
-    /// Toggle microphone forwarding for a VM (disabled until d2b supports it).
+    /// Toggle microphone forwarding for a VM.
     AudioMic { vm: String, on: bool },
-    /// Toggle speaker forwarding for a VM (disabled until d2b supports it).
+    /// Toggle speaker forwarding for a VM.
     AudioSpeaker { vm: String, on: bool },
-    /// Disable all audio forwarding for a VM (disabled until d2b supports it).
+    /// Set speaker playback volume for a VM.
+    AudioSpeakerVolume { vm: String, level_percent: u8 },
+    /// Set microphone input gain for a VM.
+    AudioMicGain { vm: String, level_percent: u8 },
+    /// Disable all audio forwarding for a VM.
     AudioOff { vm: String },
     /// Open / focus the Quickshell control center.
     OpenControlCenter,
@@ -379,6 +443,19 @@ pub enum SocketIntent {
     StoreVerify {
         vm: String,
     },
+    AudioMute {
+        vm: String,
+        channel: AudioChannel,
+        mute: bool,
+    },
+    AudioSetVolume {
+        vm: String,
+        channel: AudioChannel,
+        level_percent: u8,
+    },
+    AudioOff {
+        vm: String,
+    },
 }
 
 fn is_false(value: &bool) -> bool {
@@ -407,6 +484,7 @@ mod tests {
                     static_ip: None,
                     readiness: vec![],
                     usb: vec![],
+                    audio: None,
                     quick_launch: vec![],
                 },
                 Vm {
@@ -421,6 +499,7 @@ mod tests {
                     static_ip: None,
                     readiness: vec![],
                     usb: vec![],
+                    audio: None,
                     quick_launch: vec![],
                 },
             ],
@@ -450,7 +529,35 @@ mod tests {
             static_ip: None,
             readiness: vec![],
             usb: vec![],
+            audio: None,
             quick_launch: vec![],
+        });
+        assert!(state.needs_attention());
+    }
+
+    #[test]
+    fn attention_triggers_on_active_microphone() {
+        let mut state = WlState {
+            connectivity: Connectivity::Connected,
+            ..Default::default()
+        };
+        state.vms.push(Vm {
+            name: "corp-vm".into(),
+            audio: Some(VmAudioState {
+                speaker: AudioChannelState {
+                    level: Some(80),
+                    muted: false,
+                },
+                microphone: AudioChannelState {
+                    level: Some(50),
+                    muted: false,
+                },
+                provider_kind: AudioProviderKind::LocalHypervisor,
+                enforcement: AudioEnforcementPosture::HostAndGuest,
+                error_kind: None,
+                remediation: None,
+            }),
+            ..Default::default()
         });
         assert!(state.needs_attention());
     }
@@ -472,6 +579,7 @@ mod tests {
                 static_ip: None,
                 readiness: vec![],
                 usb: vec![],
+                audio: None,
                 quick_launch: vec![],
             }],
             stale: false,
@@ -526,6 +634,14 @@ mod tests {
             ActionKind::AudioSpeaker {
                 vm: "corp-vm".into(),
                 on: false,
+            },
+            ActionKind::AudioSpeakerVolume {
+                vm: "corp-vm".into(),
+                level_percent: 70,
+            },
+            ActionKind::AudioMicGain {
+                vm: "corp-vm".into(),
+                level_percent: 40,
             },
             ActionKind::AudioOff {
                 vm: "corp-vm".into(),

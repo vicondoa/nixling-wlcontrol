@@ -20,9 +20,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use wlcontrol_core::error::{WlError, WlResult};
 use wlcontrol_core::model::{
-    AuthRole, Connectivity, RuntimeState, SocketIntent, UsbClaim, VmCapabilities,
+    AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioProviderKind, AuthRole,
+    Connectivity, RuntimeState, SocketIntent, UsbClaim, VmAudioState, VmCapabilities, VmFeatures,
 };
-use wlcontrol_core::sources::{Auth, Inventory, InventoryVm, ReduceInput, UsbProbe, VmStatus};
+use wlcontrol_core::sources::{
+    AudioStatus, AudioStatusEntry, AudioStatusError, Auth, Inventory, InventoryVm, ReduceInput,
+    UsbProbe, VmStatus,
+};
 use wlcontrol_core::Config;
 
 mod transport;
@@ -97,6 +101,7 @@ impl D2bClient {
         // daemon-maintained fast model. Do not run per-VM status or deep USB
         // probe calls on the UI refresh path.
         let status = self.request(request_status_model)?;
+        let audio = self.request(request_audio_status).ok();
 
         Ok(ReduceInput {
             connectivity: Connectivity::Connected,
@@ -104,6 +109,7 @@ impl D2bClient {
             inventory: Some(status.inventory),
             statuses: status.statuses,
             usb: Some(status.usb),
+            audio,
         })
     }
 
@@ -193,6 +199,15 @@ impl D2bClient {
                     ),
                 })
             }
+            SocketIntent::AudioMute { vm, channel, mute } => {
+                dispatch_audio_mute(&transport, vm, *channel, *mute)
+            }
+            SocketIntent::AudioSetVolume {
+                vm,
+                channel,
+                level_percent,
+            } => dispatch_audio_set_volume(&transport, vm, *channel, *level_percent),
+            SocketIntent::AudioOff { vm } => dispatch_audio_off(&transport, vm),
         }
     }
 
@@ -207,6 +222,35 @@ impl D2bClient {
         transport.send_payload(&hello_frame()?)?;
         parse_hello_reply(&transport.recv_payload()?)?;
         Ok(transport)
+    }
+}
+
+fn audio_off_error_is_fatal(error: &WlError) -> bool {
+    !matches!(error, WlError::D2b(_))
+}
+
+fn dispatch_audio_off(transport: &SeqpacketTransport, vm: &str) -> WlResult<DispatchOutcome> {
+    // Privacy boundary: try the microphone first, and only continue after
+    // daemon-side D2b errors. Fatal transport/protocol errors mean the socket is
+    // no longer trustworthy for a second request.
+    let microphone = match dispatch_audio_mute(transport, vm, AudioChannel::Microphone, true) {
+        Ok(outcome) => Ok(outcome),
+        Err(err) if audio_off_error_is_fatal(&err) => return Err(err),
+        Err(err) => Err(err),
+    };
+    let speaker = match dispatch_audio_mute(transport, vm, AudioChannel::Speaker, true) {
+        Ok(outcome) => Ok(outcome),
+        Err(err) if audio_off_error_is_fatal(&err) => return Err(err),
+        Err(err) => Err(err),
+    };
+    match (microphone, speaker) {
+        (Ok(_), Ok(_)) => Ok(DispatchOutcome {
+            summary: format!("audio {vm} disabled"),
+        }),
+        (Err(err), Ok(_)) | (Ok(_), Err(err)) => Err(err),
+        (Err(microphone), Err(speaker)) => Err(WlError::D2b(format!(
+            "audio {vm} disable failed: microphone: {microphone}; speaker: {speaker}"
+        ))),
     }
 }
 
@@ -292,6 +336,98 @@ fn request_usb_probe(transport: &SeqpacketTransport) -> WlResult<UsbProbe> {
     Ok(UsbProbe { claims })
 }
 
+fn request_audio_status(transport: &SeqpacketTransport) -> WlResult<AudioStatus> {
+    let value = request_value(
+        transport,
+        audio_frame("status", json_values([("vms", Value::Array(Vec::new()))]))?,
+    )?;
+    let payload = response_payload(value, "audioOpResponse", "audio", None)?;
+    if payload.get("op").and_then(Value::as_str) != Some("status") {
+        return Err(WlError::Protocol(
+            "audio status response carried a different operation".to_owned(),
+        ));
+    }
+    let result = payload
+        .get("result")
+        .ok_or_else(|| WlError::Protocol("audio status response missing result".to_owned()))?;
+    audio_status_from_result(result)
+}
+
+fn dispatch_audio_mute(
+    transport: &SeqpacketTransport,
+    vm: &str,
+    channel: AudioChannel,
+    mute: bool,
+) -> WlResult<DispatchOutcome> {
+    let value = request_value(
+        transport,
+        audio_frame(
+            "mute",
+            json_values([
+                ("vm", Value::String(vm.to_owned())),
+                (
+                    "channel",
+                    Value::String(audio_channel_wire(channel).to_owned()),
+                ),
+                ("mute", Value::Bool(mute)),
+            ]),
+        )?,
+    )?;
+    let result = audio_set_result(value, "mute")?;
+    Ok(DispatchOutcome {
+        summary: format!(
+            "audio {} {}: {}",
+            result.vm,
+            audio_channel_label(result.channel),
+            if result.state.muted {
+                "muted"
+            } else {
+                "unmuted"
+            }
+        ),
+    })
+}
+
+fn dispatch_audio_set_volume(
+    transport: &SeqpacketTransport,
+    vm: &str,
+    channel: AudioChannel,
+    level_percent: u8,
+) -> WlResult<DispatchOutcome> {
+    if level_percent > 100 {
+        return Err(WlError::Config(
+            "audio level must be between 0 and 100".to_owned(),
+        ));
+    }
+    let value = request_value(
+        transport,
+        audio_frame(
+            "setVolume",
+            json_values([
+                ("vm", Value::String(vm.to_owned())),
+                (
+                    "channel",
+                    Value::String(audio_channel_wire(channel).to_owned()),
+                ),
+                ("level", Value::from(level_percent)),
+            ]),
+        )?,
+    )?;
+    let result = audio_set_result(value, "setVolume")?;
+    let level = result
+        .state
+        .level
+        .unwrap_or_else(|| u16::from(level_percent));
+    Ok(DispatchOutcome {
+        summary: format!(
+            "audio {} {} level: {}%",
+            result.vm,
+            audio_channel_label(result.channel),
+            level
+        ),
+    })
+}
+
 fn dispatch_mutating(
     transport: &SeqpacketTransport,
     request_type: &str,
@@ -359,6 +495,13 @@ fn frame_empty(type_name: &str) -> WlResult<Vec<u8>> {
 fn frame(type_name: &str, mut payload: Map<String, Value>) -> WlResult<Vec<u8>> {
     payload.insert("type".to_owned(), Value::String(type_name.to_owned()));
     serde_json::to_vec(&Value::Object(payload)).map_err(WlError::from)
+}
+
+fn audio_frame(op: &str, args: Map<String, Value>) -> WlResult<Vec<u8>> {
+    let mut payload = Map::new();
+    payload.insert("op".to_owned(), Value::String(op.to_owned()));
+    payload.insert("args".to_owned(), Value::Object(args));
+    frame("audio", payload)
 }
 
 fn json_object<const N: usize>(fields: [(&str, String); N]) -> Map<String, Value> {
@@ -569,12 +712,38 @@ fn inventory_vm_from_value(value: &Value) -> Option<InventoryVm> {
         name,
         env: string_field(value, &["env"]),
         is_net_vm: bool_field(value, &["isNetVm", "is_net_vm"]).unwrap_or(false),
-        features: wlcontrol_core::model::VmFeatures::default(),
+        features: features_from_value(value),
         capabilities: capabilities_from_value(value),
         static_ip: None,
         coarse_status: nested_string_field(value, &["lifecycle"], &["state"])
             .or_else(|| runtime_text(value.get("runtime"))),
     })
+}
+
+fn features_from_value(value: &Value) -> VmFeatures {
+    let mut features = VmFeatures::default();
+    for parent in ["features", "components", "capabilities", "manifest"] {
+        if let Some(source) = value.get(parent) {
+            apply_features(&mut features, source);
+        }
+    }
+    apply_features(&mut features, value);
+    features
+}
+
+fn apply_features(features: &mut VmFeatures, value: &Value) {
+    if let Some(v) = bool_field(value, &["graphics"]) {
+        features.graphics = v;
+    }
+    if let Some(v) = bool_field(value, &["tpm"]) {
+        features.tpm = v;
+    }
+    if let Some(v) = bool_field(value, &["usbip", "usbIp", "usb"]) {
+        features.usbip = v;
+    }
+    if let Some(v) = bool_field(value, &["audio"]) {
+        features.audio = v;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -786,6 +955,172 @@ fn usb_claim_from_value(value: &Value) -> Option<UsbClaim> {
         bound: bool_field(value, &["bound"]).unwrap_or_else(|| status == "bound"),
         owner_vm: string_field(value, &["ownerVm", "owner_vm"]),
     })
+}
+
+#[derive(Debug)]
+struct AudioSetWireResult {
+    vm: String,
+    channel: AudioChannel,
+    state: AudioChannelState,
+}
+
+fn audio_status_from_result(value: &Value) -> WlResult<AudioStatus> {
+    let entries = value
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| audio_status_entry_from_value(entry).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let errors = value
+        .get("errors")
+        .and_then(Value::as_array)
+        .map(|errors| {
+            errors
+                .iter()
+                .filter_map(|error| audio_status_error_from_value(error).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(AudioStatus { entries, errors })
+}
+
+fn audio_status_entry_from_value(value: &Value) -> WlResult<AudioStatusEntry> {
+    let vm = string_field(value, &["vm"])
+        .ok_or_else(|| WlError::Protocol("audio entry missing vm".to_owned()))?;
+    let speaker = audio_channel_state_from_value(
+        value
+            .get("speaker")
+            .ok_or_else(|| WlError::Protocol("audio entry missing speaker".to_owned()))?,
+    )?;
+    let microphone = audio_channel_state_from_value(
+        value
+            .get("microphone")
+            .ok_or_else(|| WlError::Protocol("audio entry missing microphone".to_owned()))?,
+    )?;
+    let provider_kind = parse_audio_provider(
+        string_field(value, &["providerKind", "provider_kind"])
+            .as_deref()
+            .ok_or_else(|| WlError::Protocol("audio entry missing providerKind".to_owned()))?,
+    )?;
+    let enforcement = parse_audio_enforcement(
+        string_field(value, &["enforcement"])
+            .as_deref()
+            .ok_or_else(|| WlError::Protocol("audio entry missing enforcement".to_owned()))?,
+    )?;
+    Ok(AudioStatusEntry {
+        vm,
+        audio: VmAudioState {
+            speaker,
+            microphone,
+            provider_kind,
+            enforcement,
+            error_kind: None,
+            remediation: None,
+        },
+    })
+}
+
+fn audio_status_error_from_value(value: &Value) -> WlResult<AudioStatusError> {
+    Ok(AudioStatusError {
+        vm: string_field(value, &["vm"])
+            .ok_or_else(|| WlError::Protocol("audio error missing vm".to_owned()))?,
+        kind: string_field(value, &["kind"])
+            .ok_or_else(|| WlError::Protocol("audio error missing kind".to_owned()))?,
+        remediation: string_field(value, &["remediation"]),
+    })
+}
+
+fn audio_set_result(value: Value, expected_op: &str) -> WlResult<AudioSetWireResult> {
+    let payload = response_payload(value, "audioOpResponse", "audio", None)?;
+    let op = payload
+        .get("op")
+        .and_then(Value::as_str)
+        .ok_or_else(|| WlError::Protocol("audio response missing op".to_owned()))?;
+    if op != expected_op {
+        return Err(WlError::Protocol(format!(
+            "expected audio op {expected_op}, got {op}"
+        )));
+    }
+    let result = payload
+        .get("result")
+        .ok_or_else(|| WlError::Protocol("audio response missing result".to_owned()))?;
+    let channel = parse_audio_channel(
+        string_field(result, &["channel"])
+            .as_deref()
+            .ok_or_else(|| WlError::Protocol("audio result missing channel".to_owned()))?,
+    )?;
+    Ok(AudioSetWireResult {
+        vm: string_field(result, &["vm"])
+            .ok_or_else(|| WlError::Protocol("audio result missing vm".to_owned()))?,
+        channel,
+        state: audio_channel_state_from_value(
+            result
+                .get("state")
+                .ok_or_else(|| WlError::Protocol("audio result missing state".to_owned()))?,
+        )?,
+    })
+}
+
+fn audio_channel_state_from_value(value: &Value) -> WlResult<AudioChannelState> {
+    Ok(AudioChannelState {
+        level: value
+            .get("level")
+            .and_then(Value::as_u64)
+            .map(level_percent_from_wire),
+        muted: bool_field(value, &["muted"])
+            .ok_or_else(|| WlError::Protocol("audio channel state missing muted".to_owned()))?,
+    })
+}
+
+fn level_percent_from_wire(value: u64) -> u16 {
+    u16::try_from(value.min(100)).expect("clamped to 0..=100")
+}
+
+fn parse_audio_channel(value: &str) -> WlResult<AudioChannel> {
+    match value {
+        "speaker" => Ok(AudioChannel::Speaker),
+        "microphone" => Ok(AudioChannel::Microphone),
+        other => Err(WlError::Protocol(format!(
+            "unknown audio channel '{other}'"
+        ))),
+    }
+}
+
+fn parse_audio_provider(value: &str) -> WlResult<AudioProviderKind> {
+    match value {
+        "local-hypervisor" => Ok(AudioProviderKind::LocalHypervisor),
+        "qemu-media" => Ok(AudioProviderKind::QemuMedia),
+        "aca-sandbox" => Ok(AudioProviderKind::AcaSandbox),
+        _ => Ok(AudioProviderKind::Unknown),
+    }
+}
+
+fn parse_audio_enforcement(value: &str) -> WlResult<AudioEnforcementPosture> {
+    match value {
+        "host-and-guest" => Ok(AudioEnforcementPosture::HostAndGuest),
+        "host-only" => Ok(AudioEnforcementPosture::HostOnly),
+        "guest-only" => Ok(AudioEnforcementPosture::GuestOnly),
+        "unsupported" => Ok(AudioEnforcementPosture::Unsupported),
+        _ => Ok(AudioEnforcementPosture::Unknown),
+    }
+}
+
+fn audio_channel_wire(channel: AudioChannel) -> &'static str {
+    match channel {
+        AudioChannel::Speaker => "speaker",
+        AudioChannel::Microphone => "microphone",
+    }
+}
+
+fn audio_channel_label(channel: AudioChannel) -> &'static str {
+    match channel {
+        AudioChannel::Speaker => "speaker",
+        AudioChannel::Microphone => "microphone",
+    }
 }
 
 fn capabilities_from_value(value: &Value) -> VmCapabilities {
@@ -1043,5 +1378,46 @@ mod tests {
         assert!(reject_privileged_broker_socket("/run/d2b/priv.sock").is_err());
         assert!(reject_privileged_broker_socket("/custom/priv.sock").is_err());
         assert!(reject_privileged_broker_socket("/run/d2b/public.sock").is_ok());
+    }
+
+    #[test]
+    fn audio_status_parser_tolerates_forward_compatible_entries() {
+        let status = audio_status_from_result(&serde_json::json!({
+            "entries": [
+                {
+                    "vm": "future-vm",
+                    "speaker": { "level": 250, "muted": false },
+                    "microphone": { "level": 150, "muted": true },
+                    "providerKind": "future-provider",
+                    "enforcement": "future-mode"
+                },
+                {
+                    "vm": "broken-vm",
+                    "speaker": { "level": 80, "muted": false },
+                    "providerKind": "local-hypervisor",
+                    "enforcement": "host-and-guest"
+                }
+            ],
+            "errors": [
+                { "vm": "aca-vm", "kind": "provider-misconfigured" },
+                { "kind": "malformed-without-vm" }
+            ]
+        }))
+        .expect("forward-compatible audio status parses");
+
+        assert_eq!(status.entries.len(), 1);
+        assert_eq!(status.entries[0].vm, "future-vm");
+        assert_eq!(
+            status.entries[0].audio.provider_kind,
+            AudioProviderKind::Unknown
+        );
+        assert_eq!(
+            status.entries[0].audio.enforcement,
+            AudioEnforcementPosture::Unknown
+        );
+        assert_eq!(status.entries[0].audio.speaker.level, Some(100));
+        assert_eq!(status.entries[0].audio.microphone.level, Some(100));
+        assert_eq!(status.errors.len(), 1);
+        assert_eq!(status.errors[0].vm, "aca-vm");
     }
 }

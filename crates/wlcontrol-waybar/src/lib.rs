@@ -183,6 +183,48 @@ fn vm_tooltip_line(vm: &Vm) -> String {
         line.push_str(" · usb=");
         line.push_str(&usb.join(","));
     }
+    if let Some(audio) = &vm.audio {
+        if let Some(kind) = &audio.error_kind {
+            line.push_str(" · audio=");
+            line.push_str(kind);
+            if let Some(remediation) = &audio.remediation {
+                line.push_str(" (");
+                line.push_str(remediation);
+                line.push(')');
+            }
+        } else {
+            line.push_str(" · audio=");
+            line.push_str(if audio.speaker.muted {
+                "spk-off"
+            } else {
+                "spk-on"
+            });
+            if let Some(level) = audio.speaker.level {
+                line.push('(');
+                line.push_str(&level.to_string());
+                line.push_str("%)");
+            }
+            line.push('/');
+            line.push_str(if audio.microphone.muted {
+                "mic-off"
+            } else {
+                "mic-on!"
+            });
+            if let Some(level) = audio.microphone.level {
+                line.push('(');
+                line.push_str(&level.to_string());
+                line.push_str("%)");
+            }
+            line.push(' ');
+            line.push_str(match audio.enforcement {
+                wlcontrol_core::model::AudioEnforcementPosture::HostAndGuest => "host+guest",
+                wlcontrol_core::model::AudioEnforcementPosture::HostOnly => "host-only",
+                wlcontrol_core::model::AudioEnforcementPosture::GuestOnly => "guest-only",
+                wlcontrol_core::model::AudioEnforcementPosture::Unsupported => "unsupported",
+                wlcontrol_core::model::AudioEnforcementPosture::Unknown => "unknown",
+            });
+        }
+    }
 
     line
 }
@@ -225,7 +267,10 @@ fn role_label(role: AuthRole) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wlcontrol_core::model::{UsbClaim, VmFeatures};
+    use wlcontrol_core::model::{
+        AudioChannelState, AudioEnforcementPosture, AudioProviderKind, UsbClaim, VmAudioState,
+        VmFeatures,
+    };
 
     fn vm(name: &str, state: RuntimeState, net: bool) -> Vm {
         Vm {
@@ -240,6 +285,7 @@ mod tests {
             static_ip: None,
             readiness: vec![],
             usb: vec![],
+            audio: None,
             quick_launch: vec![],
         }
     }
@@ -353,6 +399,55 @@ mod tests {
         assert!(line.class.contains(&"attention".to_owned()));
         assert!(line.class.contains(&"stale".to_owned()));
         assert_eq!(line.text, "◆ 1/1 !");
+    }
+
+    #[test]
+    fn audio_microphone_and_errors_trigger_attention_tooltip_detail() {
+        let mut target = vm("corp-vm", RuntimeState::Running, false);
+        target.audio = Some(VmAudioState {
+            speaker: AudioChannelState {
+                level: Some(80),
+                muted: false,
+            },
+            microphone: AudioChannelState {
+                level: Some(50),
+                muted: false,
+            },
+            provider_kind: AudioProviderKind::LocalHypervisor,
+            enforcement: AudioEnforcementPosture::HostAndGuest,
+            error_kind: None,
+            remediation: None,
+        });
+        let mut errored = vm("aca-vm", RuntimeState::Stopped, false);
+        errored.audio = Some(VmAudioState {
+            speaker: AudioChannelState {
+                level: None,
+                muted: true,
+            },
+            microphone: AudioChannelState {
+                level: None,
+                muted: true,
+            },
+            provider_kind: AudioProviderKind::Unknown,
+            enforcement: AudioEnforcementPosture::Unsupported,
+            error_kind: Some("provider-misconfigured".into()),
+            remediation: Some("start guestd".into()),
+        });
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![target, errored],
+            stale: false,
+            note: None,
+        };
+
+        let line = render(&state);
+
+        assert!(line.class.contains(&"attention".to_owned()));
+        assert!(line.tooltip.contains("audio=spk-on(80%)/mic-on!(50%)"));
+        assert!(line
+            .tooltip
+            .contains("audio=provider-misconfigured (start guestd)"));
     }
 
     #[test]

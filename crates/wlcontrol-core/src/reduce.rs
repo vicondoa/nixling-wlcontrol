@@ -18,9 +18,10 @@ use std::collections::HashSet;
 
 use crate::config::Config;
 use crate::model::{
-    AuthRole, Connectivity, QuickLaunchIcon, RuntimeState, UsbClaim, Vm, VmCapabilities, WlState,
+    AudioChannelState, AudioEnforcementPosture, AudioProviderKind, AuthRole, Connectivity,
+    QuickLaunchIcon, RuntimeState, UsbClaim, Vm, VmAudioState, VmCapabilities, WlState,
 };
-use crate::sources::{InventoryVm, ReduceInput, VmStatus};
+use crate::sources::{AudioStatus, InventoryVm, ReduceInput, VmStatus};
 
 /// Reduce a bundle of source fragments into the aggregate [`WlState`].
 pub fn reduce(input: ReduceInput) -> WlState {
@@ -35,6 +36,7 @@ pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
         inventory,
         statuses,
         usb,
+        audio,
     } = input;
 
     if connectivity != Connectivity::Connected {
@@ -56,6 +58,7 @@ pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
 
     let inventory = inventory.unwrap_or_default();
     let usb_claims = usb.map(|u| u.claims).unwrap_or_default();
+    let audio = audio.unwrap_or_default();
     let hidden_names = config
         .hidden_vms
         .iter()
@@ -69,6 +72,7 @@ pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
                 inv,
                 &statuses,
                 &usb_claims,
+                &audio,
                 &hidden_names,
                 config.show_pending_restart,
                 config,
@@ -89,6 +93,7 @@ fn build_vm(
     inv: InventoryVm,
     statuses: &[VmStatus],
     usb_claims: &[UsbClaim],
+    audio: &AudioStatus,
     hidden_names: &HashSet<&str>,
     show_pending_restart: bool,
     config: &Config,
@@ -106,6 +111,7 @@ fn build_vm(
         .filter(|c| c.vm == inv.name)
         .cloned()
         .collect();
+    let audio_state = audio_state_for(&inv.name, audio);
     let quick_launch = config
         .quick_launch
         .iter()
@@ -129,8 +135,33 @@ fn build_vm(
         static_ip: inv.static_ip,
         readiness: status.map(|s| s.readiness.clone()).unwrap_or_default(),
         usb,
+        audio: audio_state,
         quick_launch,
     }
+}
+
+fn audio_state_for(vm: &str, audio: &AudioStatus) -> Option<VmAudioState> {
+    if let Some(entry) = audio.entries.iter().find(|entry| entry.vm == vm) {
+        return Some(entry.audio.clone());
+    }
+    audio
+        .errors
+        .iter()
+        .find(|error| error.vm == vm)
+        .map(|error| VmAudioState {
+            speaker: AudioChannelState {
+                level: None,
+                muted: true,
+            },
+            microphone: AudioChannelState {
+                level: None,
+                muted: true,
+            },
+            provider_kind: AudioProviderKind::LocalHypervisor,
+            enforcement: AudioEnforcementPosture::Unsupported,
+            error_kind: Some(error.kind.clone()),
+            remediation: error.remediation.clone(),
+        })
 }
 
 fn merge_capabilities(inventory: VmCapabilities, status: Option<VmCapabilities>) -> VmCapabilities {
@@ -195,7 +226,9 @@ fn is_framework_net_vm_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::{Auth, Inventory, UsbProbe};
+    use crate::sources::{
+        AudioStatus, AudioStatusEntry, AudioStatusError, Auth, Inventory, UsbProbe,
+    };
 
     fn inventory_vm(name: &str, coarse_status: Option<&str>) -> InventoryVm {
         InventoryVm {
@@ -239,12 +272,84 @@ mod tests {
                 capabilities: Default::default(),
             }],
             usb: Some(UsbProbe::default()),
+            audio: None,
         };
         let state = reduce(input);
         assert_eq!(state.vms.len(), 1);
         assert_eq!(state.vms[0].state, RuntimeState::Running);
         assert!(state.vms[0].pending_restart);
         assert_eq!(state.role, AuthRole::Admin);
+    }
+
+    #[test]
+    fn audio_status_entry_attaches_to_vm() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![inventory_vm("corp-vm", Some("running"))],
+            }),
+            audio: Some(AudioStatus {
+                entries: vec![AudioStatusEntry {
+                    vm: "corp-vm".into(),
+                    audio: VmAudioState {
+                        speaker: AudioChannelState {
+                            level: Some(80),
+                            muted: false,
+                        },
+                        microphone: AudioChannelState {
+                            level: Some(50),
+                            muted: true,
+                        },
+                        provider_kind: AudioProviderKind::LocalHypervisor,
+                        enforcement: AudioEnforcementPosture::HostAndGuest,
+                        error_kind: None,
+                        remediation: None,
+                    },
+                }],
+                errors: vec![],
+            }),
+            ..Default::default()
+        };
+
+        let state = reduce(input);
+
+        let audio = state.vms[0].audio.as_ref().expect("audio state");
+        assert_eq!(audio.speaker.level, Some(80));
+        assert!(!audio.speaker.muted);
+        assert_eq!(audio.microphone.level, Some(50));
+        assert!(audio.microphone.muted);
+    }
+
+    #[test]
+    fn audio_status_error_marks_attention() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![inventory_vm("corp-vm", Some("stopped"))],
+            }),
+            audio: Some(AudioStatus {
+                entries: vec![],
+                errors: vec![AudioStatusError {
+                    vm: "corp-vm".into(),
+                    kind: "provider-misconfigured".into(),
+                    remediation: Some("start guestd".into()),
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let state = reduce(input);
+
+        let audio = state.vms[0].audio.as_ref().expect("audio error state");
+        assert_eq!(audio.error_kind.as_deref(), Some("provider-misconfigured"));
+        assert_eq!(audio.remediation.as_deref(), Some("start guestd"));
+        assert!(state.needs_attention());
     }
 
     #[test]

@@ -6,15 +6,15 @@ niri / Wayland desktop where multiple worlds share one desktop.
 
 `d2b-wlcontrol` shows which d2b realms are running and surfaces the
 controls a d2b operator can already drive — start / stop / restart,
-detached terminal launch, attach / detach USB, verify / build / boot /
-switch, and observability portal open — without ever touching anything privileged. It talks only to the
-d2bd **public** socket and, where it is the better boundary, the
-official `d2b` CLI.
+detached terminal launch, attach / detach USB, audio mic/speaker/level
+controls, verify / build / boot / switch, and observability portal open —
+without ever touching anything privileged. It talks only to the d2bd
+**public** socket and, where it is the better boundary, the official `d2b`
+CLI.
 
 > Status: the Waybar indicator, the live d2bd public-socket client,
-> the reduced status model, auth-gated action planning, and the Quickshell
-> layer-shell popup are all in place. Audio mic/speaker controls remain out of
-> the popup pending a daemon-native d2b audio control plane.
+> the reduced status model, auth-gated action planning, Quickshell
+> layer-shell popup, and d2b audio controls are all in place.
 
 ## What it does
 
@@ -23,9 +23,10 @@ official `d2b` CLI.
   `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip.
 - **A Quickshell layer-shell control popup** — per-VM cards with lifecycle
   controls, graceful stop as the primary Stop action, detached terminal launch,
-  USB attach/detach, store verify/build/boot/switch icons, config-driven
-  quick-launch icons, and an observability portal button, all gated on your
-  effective d2b authorization.
+  USB attach/detach, audio mic/speaker toggles, speaker volume / mic gain
+  sliders, store verify/build/boot/switch icons, config-driven quick-launch
+  icons, and an observability portal button, all gated on your effective d2b
+  authorization.
 - **d2b-native colors** — Waybar CSS consumes d2b's generated
   `/etc/d2b/ui-colors.css` GTK `@define-color` names, while the popup
   keeps neutral shell colors local and consumes `/etc/d2b/ui-colors.json`
@@ -33,9 +34,10 @@ official `d2b` CLI.
 - **Safe by construction** — public socket only; no broker socket, no
   `sudo`, no direct state-file mutation, argv-only command execution.
 
-Audio (mic / speaker) controls are intentionally not rendered until d2b
-exposes a daemon-native audio control plane — today those d2b verbs return
-`not-yet-implemented`.
+Audio controls use d2b's daemon-native public audio surface. They never read or
+write d2b audio state files directly and stay disabled with an explanation when
+the connected daemon is too old, the VM has no audio capability, or the
+provider reports degraded/unsupported audio enforcement.
 
 ## Install
 

@@ -38,6 +38,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **d2b audio controls.** The public-socket client now consumes d2b
+  `AudioStatus` and dispatches daemon-native audio mutations for microphone
+  toggle, speaker toggle, speaker volume, microphone gain, and all-audio-off
+  without touching broker or root-owned audio state files. The Quickshell popup
+  shows per-VM audio state behind expanded controls, preserves levels across
+  mute toggles, sends slider changes on commit, and marks host-only,
+  unsupported, degraded, or provider-misconfigured entries inline.
 - **Workspace and contract.** Rust workspace with `wlcontrol-core`
   (domain model, config, reducer, action planner), `wlcontrol-d2b`
   (public-socket client), `wlcontrol-waybar` (custom-module renderer),
@@ -63,8 +70,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   per-env VM cards, one-click show/hide behavior, Material-style action
   icons, first-class USB attach/detach chips, and auth-gated controls
   for start/stop/restart, terminal launch, switch, and store verify.
-  Audio controls remain hidden until d2b exposes a daemon-native audio
-  control plane.
 - **Control popup refinements.** The popup now uses a centered `d2b`
   heading, can be dragged after opening, fits its VM list up to a half-screen
   cap with a thin scrollbar, sorts `sys-*` VMs to the bottom, shows

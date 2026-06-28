@@ -109,8 +109,24 @@ enum ActionCommand {
     UsbDetach { vm: String, bus_id: String },
     /// Verify a VM's store live pool.
     StoreVerify { vm: String },
+    /// Enable or disable a VM microphone.
+    AudioMic { vm: String, state: AudioToggle },
+    /// Enable or disable a VM speaker.
+    AudioSpeaker { vm: String, state: AudioToggle },
+    /// Set speaker playback volume, 0-100.
+    AudioSpeakerVolume { vm: String, level_percent: u8 },
+    /// Set microphone input gain, 0-100.
+    AudioMicGain { vm: String, level_percent: u8 },
+    /// Disable microphone and speaker forwarding.
+    AudioOff { vm: String },
     /// Open the configured Signoz observability portal.
     Observability,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum AudioToggle {
+    On,
+    Off,
 }
 
 impl ActionCommand {
@@ -130,6 +146,21 @@ impl ActionCommand {
             ActionCommand::UsbAttach { vm, bus_id } => ActionKind::UsbAttach { vm, bus_id },
             ActionCommand::UsbDetach { vm, bus_id } => ActionKind::UsbDetach { vm, bus_id },
             ActionCommand::StoreVerify { vm } => ActionKind::StoreVerify { vm },
+            ActionCommand::AudioMic { vm, state } => ActionKind::AudioMic {
+                vm,
+                on: matches!(state, AudioToggle::On),
+            },
+            ActionCommand::AudioSpeaker { vm, state } => ActionKind::AudioSpeaker {
+                vm,
+                on: matches!(state, AudioToggle::On),
+            },
+            ActionCommand::AudioSpeakerVolume { vm, level_percent } => {
+                ActionKind::AudioSpeakerVolume { vm, level_percent }
+            }
+            ActionCommand::AudioMicGain { vm, level_percent } => {
+                ActionKind::AudioMicGain { vm, level_percent }
+            }
+            ActionCommand::AudioOff { vm } => ActionKind::AudioOff { vm },
             ActionCommand::Observability => ActionKind::OpenObservability,
         }
     }
