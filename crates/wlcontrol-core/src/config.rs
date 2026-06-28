@@ -108,23 +108,8 @@ pub struct UiColorBorder {
     pub urgent: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub struct UiColorLoad {
-    pub colors: UiColorArtifact,
-    pub degraded: Option<UiColorDegraded>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub struct UiColorDegraded {
-    pub reason: UiColorFallbackReason,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UiColorFallbackReason {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiColorErrorKind {
     Missing,
     Malformed,
     UnsupportedVersion,
@@ -274,7 +259,7 @@ impl Config {
         Ok(())
     }
 
-    pub fn load_ui_colors(&self) -> UiColorLoad {
+    pub fn load_ui_colors(&self) -> WlResult<Option<UiColorArtifact>> {
         load_ui_colors_from_path(Path::new(&self.color_artifact_path))
     }
 
@@ -301,78 +286,43 @@ impl Config {
     }
 }
 
-pub fn load_ui_colors_from_path(path: &Path) -> UiColorLoad {
-    let fallback = || default_ui_colors();
+pub fn load_ui_colors_from_path(path: &Path) -> WlResult<Option<UiColorArtifact>> {
     if !path.exists() {
-        if path != Path::new(DEFAULT_COLOR_ARTIFACT_PATH) {
-            log_color_fallback(UiColorFallbackReason::Missing, path, "artifact is missing");
-            return UiColorLoad {
-                colors: fallback(),
-                degraded: Some(UiColorDegraded {
-                    reason: UiColorFallbackReason::Missing,
-                    message: "UI color artifact is missing; verify d2b.site.ui configuration"
-                        .to_owned(),
-                }),
-            };
-        }
-        return UiColorLoad {
-            colors: fallback(),
-            degraded: None,
-        };
+        log_color_error(UiColorErrorKind::Missing, path, "artifact is missing");
+        return Ok(None);
     }
 
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) => {
-            log_color_fallback(UiColorFallbackReason::Malformed, path, &err.to_string());
-            return UiColorLoad {
-                colors: fallback(),
-                degraded: Some(UiColorDegraded {
-                    reason: UiColorFallbackReason::Malformed,
-                    message:
-                        "UI color artifact could not be read; verify d2b UI color configuration"
-                            .to_owned(),
-                }),
-            };
+            log_color_error(UiColorErrorKind::Malformed, path, &err.to_string());
+            return Ok(None);
         }
     };
 
     let parsed: UiColorArtifact = match serde_json::from_str(&text) {
         Ok(parsed) => parsed,
         Err(err) => {
-            log_color_fallback(UiColorFallbackReason::Malformed, path, &err.to_string());
-            return UiColorLoad {
-                colors: fallback(),
-                degraded: Some(UiColorDegraded {
-                    reason: UiColorFallbackReason::Malformed,
-                    message: "UI color artifact is malformed; verify d2b UI color configuration"
-                        .to_owned(),
-                }),
-            };
+            log_color_error(UiColorErrorKind::Malformed, path, &err.to_string());
+            return Ok(None);
         }
     };
 
     match validate_ui_colors(parsed) {
-        Ok(colors) => UiColorLoad {
-            colors,
-            degraded: None,
-        },
+        Ok(colors) => Ok(Some(colors)),
         Err((reason, message)) => {
-            log_color_fallback(reason, path, &message);
-            UiColorLoad {
-                colors: fallback(),
-                degraded: Some(UiColorDegraded { reason, message }),
-            }
+            log_color_error(reason, path, &message);
+            Ok(None)
         }
     }
 }
 
 fn validate_ui_colors(
     colors: UiColorArtifact,
-) -> Result<UiColorArtifact, (UiColorFallbackReason, String)> {
+) -> Result<UiColorArtifact, (UiColorErrorKind, String)> {
     if colors.version != UI_COLOR_ARTIFACT_VERSION {
         return Err((
-            UiColorFallbackReason::UnsupportedVersion,
+            UiColorErrorKind::UnsupportedVersion,
             format!(
                 "unsupported UI color artifact version {}; expected {UI_COLOR_ARTIFACT_VERSION}",
                 colors.version
@@ -400,7 +350,7 @@ fn validate_ui_colors(
     for (field, value) in values {
         if !is_lower_hex_color(value) {
             return Err((
-                UiColorFallbackReason::Malformed,
+                UiColorErrorKind::Malformed,
                 format!("UI color artifact field {field} is not a normalized #rrggbb color"),
             ));
         }
@@ -418,18 +368,18 @@ fn is_lower_hex_color(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
 }
 
-fn log_color_fallback(reason: UiColorFallbackReason, path: &Path, detail: &str) {
-    let reason = match reason {
-        UiColorFallbackReason::Missing => "missing",
-        UiColorFallbackReason::Malformed => "malformed",
-        UiColorFallbackReason::UnsupportedVersion => "unsupported_version",
+fn log_color_error(kind: UiColorErrorKind, path: &Path, detail: &str) {
+    let reason = match kind {
+        UiColorErrorKind::Missing => "missing",
+        UiColorErrorKind::Malformed => "malformed",
+        UiColorErrorKind::UnsupportedVersion => "unsupported_version",
     };
     let path_basename = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
     eprintln!(
-        "event=ui_color_artifact_fallback reason={reason} path_basename={path_basename} detail={}",
+        "event=ui_color_artifact_error reason={reason} path_basename={path_basename} detail={}",
         sanitize_log_detail(detail)
     );
 }
@@ -442,24 +392,6 @@ fn sanitize_log_detail(detail: &str) -> String {
         .collect()
 }
 
-pub fn default_ui_colors() -> UiColorArtifact {
-    UiColorArtifact {
-        version: UI_COLOR_ARTIFACT_VERSION,
-        host: UiColorHost {
-            accent: "#89b4fa".to_owned(),
-        },
-        states: UiColorStates {
-            running: "#a6e3a1".to_owned(),
-            transitioning: "#f9e2af".to_owned(),
-            pending_restart: "#fab387".to_owned(),
-            error: "#f38ba8".to_owned(),
-            denied: "#cba6f7".to_owned(),
-            unknown: "#6c7086".to_owned(),
-        },
-        envs: BTreeMap::new(),
-        vms: BTreeMap::new(),
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,33 +454,21 @@ color_artifact_path = "/tmp/d2b-ui-colors.json"
     }
 
     #[test]
-    fn default_missing_color_artifact_uses_non_degraded_fallback() {
-        let load = load_ui_colors_from_path(Path::new("/etc/d2b/ui-colors.json"));
-        assert!(load.degraded.is_none());
-        assert_eq!(load.colors.states.running, "#a6e3a1");
+    fn missing_color_artifact_uses_no_colors() {
+        let colors = load_ui_colors_from_path(Path::new("/tmp/d2b-wlcontrol-missing-colors.json"))
+            .expect("missing d2b color artifact should not abort wlcontrol");
+        assert_eq!(colors, None);
     }
 
     #[test]
-    fn configured_missing_color_artifact_is_degraded() {
-        let load = load_ui_colors_from_path(Path::new("/tmp/d2b-wlcontrol-missing-colors.json"));
-        assert_eq!(
-            load.degraded.as_ref().map(|d| d.reason),
-            Some(UiColorFallbackReason::Missing)
-        );
-        assert_eq!(load.colors.host.accent, "#89b4fa");
-    }
-
-    #[test]
-    fn malformed_color_artifact_is_degraded() {
+    fn malformed_color_artifact_uses_no_colors() {
         let dir = std::env::temp_dir().join(format!("d2b-wlcontrol-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let path = dir.join("ui-colors.json");
         std::fs::write(&path, "{not json").expect("write malformed");
-        let load = load_ui_colors_from_path(&path);
-        assert_eq!(
-            load.degraded.as_ref().map(|d| d.reason),
-            Some(UiColorFallbackReason::Malformed)
-        );
+        let colors = load_ui_colors_from_path(&path)
+            .expect("malformed d2b color artifact should not abort wlcontrol");
+        assert_eq!(colors, None);
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir(dir);
     }
@@ -585,11 +505,12 @@ color_artifact_path = "/tmp/d2b-ui-colors.json"
 }"##,
         )
         .expect("write valid artifact");
-        let load = load_ui_colors_from_path(&path);
-        assert!(load.degraded.is_none());
-        assert_eq!(load.colors.host.accent, "#010203");
-        assert_eq!(load.colors.envs["work"].accent, "#ffa500");
-        assert_eq!(load.colors.vms["work-aad"].border.active, "#ffa500");
+        let colors = load_ui_colors_from_path(&path)
+            .expect("valid d2b color artifact loads")
+            .expect("valid artifact should provide colors");
+        assert_eq!(colors.host.accent, "#010203");
+        assert_eq!(colors.envs["work"].accent, "#ffa500");
+        assert_eq!(colors.vms["work-aad"].border.active, "#ffa500");
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir(dir);
     }

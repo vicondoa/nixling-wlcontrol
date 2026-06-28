@@ -23,9 +23,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **d2bd refresh timeout.** Raised the default public-socket operation
   timeout to tolerate slower full-host status refreshes without reporting
   `daemon-down` while d2b status probes settle.
-- **Quickshell VM card colors.** VM card borders now use environment
-  accents instead of compositor-oriented per-VM border colors, keeping
-  card identity aligned with the left accent stripe.
+- **Quickshell VM card colors.** VM card borders again use d2b's per-VM
+  active border colors, while the left accent stripe continues to use
+  environment accents.
+- **d2b-only popup colors.** The Quickshell popup no longer ships its own
+  default palette; if d2b does not provide a valid color artifact, affected
+  surfaces render without color.
 - **Waybar CSS color references.** Updated the starter stylesheet and docs
   to consume d2b's generated GTK `@define-color` names
   (`@d2b_state_*`) instead of legacy CSS custom properties.
@@ -68,8 +71,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   URL button without auto-login handling.
 - **d2b color artifacts.** Waybar CSS imports
   `/etc/d2b/ui-colors.css`, and the Quickshell popup consumes parsed
-  state, env, and VM border colors from the d2b UI color artifact with
-  visible fallbacks for missing or malformed data.
+  state, env, and VM border colors from the d2b UI color artifact.
 - **Safety model.** Public socket only (never the broker socket), no
   `sudo`, no d2b state-file mutation, argv-only command execution,
   and authorization derived from `d2b auth status`.
