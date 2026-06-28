@@ -41,6 +41,6 @@ vms: { <vm>: { env, border: { active, inactive, urgent } } } }`.
 it to the popup as `D2B_WLCONTROL_THEME_JSON`. The popup keeps its
 neutral black/white/gray shell colors locally, but uses d2b state colors
 for VM dots and action feedback, per-VM active border colors for card
-borders, and env accents for card stripes. Missing, invalid, or malformed
-color data is ignored and the affected colored accent/border surfaces
-render without color instead of using wlcontrol-owned color defaults.
+borders, and no per-card environment stripe. Missing, invalid, or malformed
+color data is ignored and the affected colored accent/border surfaces render
+without color instead of using wlcontrol-owned color defaults.
