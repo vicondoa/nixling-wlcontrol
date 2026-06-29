@@ -57,10 +57,14 @@ pub fn open(config: &Config) -> WlResult<()> {
     let qml_path = materialize_qml(&dir)?;
     let backend = env::current_exe()
         .map_err(|err| WlError::Config(format!("failed to locate backend binary: {err}")))?;
-    let theme_json = match config.load_ui_colors()? {
-        Some(colors) => serde_json::to_string(&colors)?,
-        None => "{}".to_owned(),
+    let mut theme_value = match config.load_ui_colors()? {
+        Some(colors) => serde_json::to_value(colors)?,
+        None => serde_json::Value::Object(serde_json::Map::new()),
     };
+    if let serde_json::Value::Object(ref mut object) = theme_value {
+        object.insert("shell".to_owned(), serde_json::to_value(&config.theme)?);
+    }
+    let theme_json = serde_json::to_string(&theme_value)?;
 
     let mut child = Command::new("quickshell")
         .arg("--path")
@@ -268,6 +272,12 @@ ShellRoot {
     return ({})
   }
 
+  function shellColor(name, fallback) {
+    const shell = themeSection("shell")
+    const color = shell[name]
+    return isHexColor(color) ? color : fallback
+  }
+
   function isHexColor(value) {
     return typeof value === "string" && /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value)
   }
@@ -438,15 +448,15 @@ ShellRoot {
 
   function audioBadgeAccent(vm) {
     const badge = root.audioBadge(vm)
-    if (badge === "hot mic" || (vm.audio && vm.audio.errorKind)) return "#ffb3bd"
+    if (badge === "hot mic" || (vm.audio && vm.audio.errorKind)) return root.stateColor("error")
     if (badge.length > 0) return root.stateColor("pendingRestart")
-    return "#6c7086"
+    return root.shellColor("muted", "#9399b2")
   }
 
   function audioBadgeFill(vm) {
     const badge = root.audioBadge(vm)
-    if (badge === "hot mic" || (vm.audio && vm.audio.errorKind)) return "#3a171b"
-    if (badge.length > 0) return "#2e2a1a"
+    if (badge === "hot mic" || (vm.audio && vm.audio.errorKind)) return root.shellColor("error_surface", "#2e1a1a")
+    if (badge.length > 0) return root.shellColor("warning_surface", "#2e2a1a")
     return "transparent"
   }
 
@@ -732,8 +742,8 @@ ShellRoot {
     Rectangle {
       anchors.fill: parent
       radius: 18
-      color: "#0f1117"
-      border.color: "#2a2d35"
+      color: root.shellColor("background", "#0f1117")
+      border.color: root.shellColor("border", "#2a2d35")
       border.width: 1
       clip: true
 
@@ -769,7 +779,7 @@ ShellRoot {
               width: 66
               height: 22
               radius: 999
-              color: root.state.connectivity === "connected" ? "#1a2e1a" : "#2e1a1a"
+              color: root.state.connectivity === "connected" ? root.shellColor("success_surface", "#1a2e1a") : root.shellColor("error_surface", "#2e1a1a")
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               Text {
@@ -785,7 +795,7 @@ ShellRoot {
               anchors.centerIn: parent
               width: parent.width - 160
               anchors.verticalCenter: parent.verticalCenter
-              color: "#ffffff"
+              color: root.shellColor("foreground_strong", "#ffffff")
               font.pixelSize: 16
               font.bold: true
               horizontalAlignment: Text.AlignHCenter
@@ -800,14 +810,14 @@ ShellRoot {
               IconButton {
                 text: "monitoring"
                 tooltip: root.observabilityEnabled ? "Open Signoz observability portal" : "Observability URL is not configured"
-                accent: "#ffffff"
+                accent: root.shellColor("foreground_strong", "#ffffff")
                 enabled: root.observabilityEnabled && !root.busy
                 onClicked: root.action(["observability"])
               }
               IconButton {
                 text: "refresh"
                 tooltip: "Refresh VM status"
-                accent: "#ffffff"
+                accent: root.shellColor("foreground_strong", "#ffffff")
                 enabled: !root.busy
                 onClicked: root.reload()
               }
@@ -817,7 +827,7 @@ ShellRoot {
           Rectangle {
             width: parent.width
             height: 1
-            color: "#2a2d35"
+            color: root.shellColor("border", "#2a2d35")
           }
 
           Row {
@@ -825,13 +835,13 @@ ShellRoot {
             height: 26
             spacing: 10
             Text {
-              color: "#ffffff"
+              color: root.shellColor("foreground_strong", "#ffffff")
               font.pixelSize: 13
               font.bold: true
               text: root.runningCount() + "/" + root.visibleVms().length + " running"
             }
             Text {
-              color: "#9399b2"
+              color: root.shellColor("muted", "#9399b2")
               font.pixelSize: 12
               text: root.hoverHint.length > 0 ? root.hoverHint : root.statusText()
             }
@@ -842,7 +852,7 @@ ShellRoot {
             width: parent.width
             height: visible ? Math.max(26, actionResult.implicitHeight + 10) : 0
             radius: 10
-            color: root.actionFailed ? "#2e1a1a" : "#1a2e1a"
+            color: root.actionFailed ? root.shellColor("error_surface", "#2e1a1a") : root.shellColor("success_surface", "#1a2e1a")
             border.color: root.actionFailed ? root.stateColor("error") : root.stateColor("running")
             border.width: 1
 
@@ -883,7 +893,7 @@ ShellRoot {
                   width: list.width
                   height: cardContent.implicitHeight + 16
                   radius: 13
-                  color: "#16181d"
+                  color: root.shellColor("surface", "#16181d")
                   border.color: root.vmBorderColor(vm)
                   border.width: 1
                   clip: true
@@ -935,7 +945,7 @@ ShellRoot {
                       IconButton {
                         text: expanded ? "expand_less" : "more_horiz"
                         tooltip: expanded ? "Hide controls" : "More controls"
-                        accent: "#ffffff"
+                        accent: root.shellColor("foreground_strong", "#ffffff")
                         enabled: root.state.connectivity === "connected"
                         onClicked: expanded = !expanded
                       }
@@ -950,7 +960,7 @@ ShellRoot {
                       spacing: 1
                       Text {
                         width: parent.width
-                        color: "#ffffff"
+                        color: root.shellColor("foreground_strong", "#ffffff")
                         font.pixelSize: 14
                         font.bold: true
                         elide: Text.ElideRight
@@ -958,7 +968,7 @@ ShellRoot {
                       }
                       Text {
                         width: parent.width
-                        color: "#9399b2"
+                        color: root.shellColor("muted", "#9399b2")
                         font.pixelSize: 11
                         elide: Text.ElideRight
                         text: root.vmMeta(vm).replace(" · hot mic", "")
@@ -987,16 +997,16 @@ ShellRoot {
                     id: quickActions
                     width: parent.width
                     spacing: 8
-                    IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal"); accent: "#ffffff"; enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
+                    IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal"); accent: root.shellColor("foreground_strong", "#ffffff"); enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
                     Repeater {
                       model: vm.quickLaunch || []
-                      IconButton { text: modelData.icon; tooltip: enabled ? modelData.tooltip : root.disabledReason(vm, "admin", "terminal"); accent: "#ffffff"; enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"; onClicked: root.action(["quick-launch", vm.name, modelData.id]) }
+                      IconButton { text: modelData.icon; tooltip: enabled ? modelData.tooltip : root.disabledReason(vm, "admin", "terminal"); accent: root.shellColor("foreground_strong", "#ffffff"); enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"; onClicked: root.action(["quick-launch", vm.name, modelData.id]) }
                     }
-                    IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin", "restart"); accent: "#6c7086"; enabled: root.canAdvanced(vm, "restart"); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
-                    IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(vm, "admin", "storeVerify"); accent: "#6c7086"; enabled: root.canAdminMutate() && root.hasCapability(vm, "storeVerify"); onClicked: root.action(["store-verify", vm.name]) }
-                    IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(vm, "launcher", "build"); accent: "#6c7086"; enabled: root.canMutate() && root.hasCapability(vm, "build"); onClicked: root.action(["build", vm.name]) }
-                    IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(vm, "admin", "boot"); accent: "#6c7086"; enabled: root.canAdminMutate() && root.hasCapability(vm, "boot"); onClicked: root.action(["boot", vm.name]) }
-                    IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin", "switch"); accent: "#6c7086"; enabled: root.canAdvanced(vm, "switch"); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
+                    IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin", "restart"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdvanced(vm, "restart"); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
+                    IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(vm, "admin", "storeVerify"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdminMutate() && root.hasCapability(vm, "storeVerify"); onClicked: root.action(["store-verify", vm.name]) }
+                    IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(vm, "launcher", "build"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canMutate() && root.hasCapability(vm, "build"); onClicked: root.action(["build", vm.name]) }
+                    IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(vm, "admin", "boot"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdminMutate() && root.hasCapability(vm, "boot"); onClicked: root.action(["boot", vm.name]) }
+                    IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin", "switch"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdvanced(vm, "switch"); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
                   }
 
                   Column {
@@ -1013,7 +1023,7 @@ ShellRoot {
                         icon: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? "mic" : "mic_off"
                         label: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? "mic on" : "mic off"
                         tooltip: enabled ? root.audioTooltip(vm) : root.audioDisabledReason(vm)
-                        accent: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? root.stateColor("running") : "#6c7086"
+                        accent: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? root.stateColor("running") : root.shellColor("muted", "#9399b2")
                         enabled: root.canAudio(vm)
                         onClicked: root.audioToggleAction(vm, "microphone", vm.audio.microphone.muted)
                       }
@@ -1021,7 +1031,7 @@ ShellRoot {
                         icon: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? "volume_up" : "volume_off"
                         label: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? "speaker on" : "speaker off"
                         tooltip: enabled ? root.audioTooltip(vm) : root.audioDisabledReason(vm)
-                        accent: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? root.stateColor("running") : "#6c7086"
+                        accent: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? root.stateColor("running") : root.shellColor("muted", "#9399b2")
                         enabled: root.canAudio(vm)
                         onClicked: root.audioToggleAction(vm, "speaker", vm.audio.speaker.muted)
                       }
@@ -1083,7 +1093,7 @@ ShellRoot {
                         icon: modelData.bound ? "usb_off" : "usb"
                         label: root.usbLabel(modelData)
                         tooltip: enabled ? root.usbTooltip(vm, modelData) : (modelData.ownerVm && modelData.ownerVm !== vm.name ? root.usbTooltip(vm, modelData) : root.disabledReason(vm, "admin", "usbHotplug"))
-                        accent: "#6c7086"
+                        accent: root.shellColor("muted", "#9399b2")
                         enabled: root.canUsb(vm, modelData)
                         onClicked: root.attachOrPrompt(vmCard, vm, modelData)
                       }
@@ -1092,7 +1102,7 @@ ShellRoot {
                       icon: "add"
                       label: "USB"
                       tooltip: enabled ? ("Attach another USB device to " + vm.name) : root.disabledReason(vm, "admin", "usbHotplug")
-                      accent: "#6c7086"
+                      accent: root.shellColor("muted", "#9399b2")
                       enabled: root.canAdminMutate() && root.hasCapability(vm, "usbHotplug")
                       onClicked: root.attachOrPrompt(vmCard, vm, ({ busId: "pending", bound: false, ownerVm: null }))
                     }
@@ -1101,7 +1111,7 @@ ShellRoot {
                       height: 24
                       width: restartText.width + 18
                       radius: 999
-                      color: "#2e2a1a"
+                      color: root.shellColor("warning_surface", "#2e2a1a")
                       Text { id: restartText; anchors.centerIn: parent; color: root.stateColor("pendingRestart"); font.pixelSize: 10; font.bold: true; text: "restart" }
                     }
                   }
@@ -1123,7 +1133,7 @@ ShellRoot {
                           icon: "usb"
                           label: root.shortDeviceLabel(modelData)
                           tooltip: "Attach " + modelData.label + " to " + vm.name
-                          accent: "#6c7086"
+                          accent: root.shellColor("muted", "#9399b2")
                           enabled: root.canAdminMutate()
                           onClicked: root.action(["usb-attach", vm.name, modelData.busId])
                         }
@@ -1142,8 +1152,8 @@ ShellRoot {
                       width: parent.width - 86
                       height: 28
                       radius: 8
-                      color: "#0d0d0d"
-                      border.color: "#2a2d35"
+                      color: root.shellColor("input_background", "#0d0d0d")
+                      border.color: root.shellColor("border", "#2a2d35")
                       border.width: 1
 
                       TextInput {
@@ -1151,9 +1161,9 @@ ShellRoot {
                         anchors.fill: parent
                         anchors.leftMargin: 9
                         anchors.rightMargin: 9
-                        color: "#ffffff"
+                        color: root.shellColor("foreground_strong", "#ffffff")
                         selectionColor: root.hostAccentColor()
-                        selectedTextColor: "#000000"
+                        selectedTextColor: root.shellColor("inverse_foreground", "#000000")
                         font.pixelSize: 12
                         verticalAlignment: TextInput.AlignVCenter
                         text: usbEntryText
@@ -1167,7 +1177,7 @@ ShellRoot {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left
                         anchors.leftMargin: 9
-                        color: "#6c7086"
+                        color: root.shellColor("muted", "#9399b2")
                         font.pixelSize: 12
                         text: "USB bus id (e.g. 1-2)"
                       }
@@ -1177,7 +1187,7 @@ ShellRoot {
                       icon: "usb"
                       label: "attach"
                       tooltip: "Attach entered USB bus id"
-                      accent: "#6c7086"
+                      accent: root.shellColor("muted", "#9399b2")
                       enabled: usbEntryText.length > 0 && root.canAdminMutate() && root.hasCapability(vm, "usbHotplug")
                       onClicked: root.action(["usb-attach", vm.name, usbEntryText])
                     }
@@ -1201,12 +1211,12 @@ ShellRoot {
                 x: vmListFlickable.width - width
                 y: 0
                 radius: 999
-                color: "#0d0d0d"
+                color: root.shellColor("input_background", "#0d0d0d")
 
                 Rectangle {
                   width: parent.width
                   radius: 999
-                  color: "#6c7086"
+                  color: root.shellColor("muted", "#9399b2")
                   height: Math.max(24, parent.height * (vmListFlickable.height / vmListFlickable.contentHeight))
                   y: (parent.height - height) * (vmListFlickable.contentY / Math.max(1, vmListFlickable.contentHeight - vmListFlickable.height))
                 }
@@ -1220,7 +1230,7 @@ ShellRoot {
   component IconButton: Rectangle {
     property alias text: label.text
     property string tooltip: ""
-    property color accent: "#6c7086"
+    property color accent: root.shellColor("muted", "#9399b2")
     property bool prominent: false
     signal clicked()
     width: prominent ? 30 : 26
@@ -1236,7 +1246,7 @@ ShellRoot {
     Text {
       id: label
       anchors.fill: parent
-      color: parent.prominent ? "#f5f7ff" : parent.accent
+      color: parent.prominent ? root.shellColor("foreground_strong", "#f5f7ff") : parent.accent
       font.family: "Material Symbols Rounded"
       font.pixelSize: prominent ? 21 : 20
       font.bold: false
@@ -1268,8 +1278,8 @@ ShellRoot {
     radius: 10
     activeFocusOnTab: true
     opacity: enabled ? 1.0 : 0.34
-    color: "#0d0d0d"
-    border.color: activeFocus ? root.hostAccentColor() : "#2a2d35"
+    color: root.shellColor("input_background", "#0d0d0d")
+    border.color: activeFocus ? root.hostAccentColor() : root.shellColor("border", "#2a2d35")
     border.width: 1
     Keys.onLeftPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue - 5, 0, 100); commitTimer.restart() }
     Keys.onRightPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue + 5, 0, 100); commitTimer.restart() }
@@ -1302,7 +1312,7 @@ ShellRoot {
       anchors.leftMargin: 8
       anchors.verticalCenter: parent.verticalCenter
       width: 18
-      color: "#cdd6f4"
+      color: root.shellColor("foreground", "#cdd6f4")
       font.family: "Material Symbols Rounded"
       font.pixelSize: 16
       horizontalAlignment: Text.AlignHCenter
@@ -1314,7 +1324,7 @@ ShellRoot {
       anchors.leftMargin: 6
       anchors.verticalCenter: parent.verticalCenter
       width: 70
-      color: "#cdd6f4"
+      color: root.shellColor("foreground", "#cdd6f4")
       font.pixelSize: 11
       font.bold: true
       elide: Text.ElideRight
@@ -1329,7 +1339,7 @@ ShellRoot {
       anchors.verticalCenter: parent.verticalCenter
       height: 6
       radius: 999
-      color: "#252832"
+      color: root.shellColor("slider_track", "#252832")
       Rectangle {
         width: parent.width * (parent.parent.draftValue / 100)
         height: parent.height
@@ -1342,7 +1352,7 @@ ShellRoot {
         radius: 999
         x: root.clamp(parent.width * (parent.parent.draftValue / 100) - width / 2, 0, parent.width - width)
         anchors.verticalCenter: parent.verticalCenter
-        color: "#ffffff"
+        color: root.shellColor("foreground_strong", "#ffffff")
       }
     }
     Text {
@@ -1351,7 +1361,7 @@ ShellRoot {
       anchors.rightMargin: 8
       anchors.verticalCenter: parent.verticalCenter
       width: 36
-      color: "#9399b2"
+      color: root.shellColor("muted", "#9399b2")
       font.pixelSize: 11
       horizontalAlignment: Text.AlignRight
       text: parent.draftValue + "%"
@@ -1401,8 +1411,8 @@ ShellRoot {
     property string icon: ""
     property string label: ""
     property string tooltip: ""
-    property color accent: "#6c7086"
-    property color foreground: enabled ? "#f5f7ff" : "#bac2de"
+    property color accent: root.shellColor("muted", "#9399b2")
+    property color foreground: enabled ? root.shellColor("foreground_strong", "#f5f7ff") : root.shellColor("foreground_disabled", "#bac2de")
     signal clicked()
 
     height: 28
@@ -1472,9 +1482,10 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_OBSERVABILITY_ENABLED"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_THEME_JSON"));
-        assert!(QML_SOURCE.contains("color: \"#16181d\""));
-        assert!(QML_SOURCE.contains("color: \"#ffffff\""));
-        assert!(QML_SOURCE.contains("color: \"#9399b2\""));
+        assert!(QML_SOURCE.contains("function shellColor(name, fallback)"));
+        assert!(QML_SOURCE.contains("root.shellColor(\"surface\", \"#16181d\")"));
+        assert!(QML_SOURCE.contains("root.shellColor(\"foreground_strong\", \"#ffffff\")"));
+        assert!(QML_SOURCE.contains("root.shellColor(\"muted\", \"#9399b2\")"));
         assert!(!QML_SOURCE.contains("D2B_WLCONTROL_STATE_COLORS"));
         assert!(!QML_SOURCE.contains("D2B_WLCONTROL_ENV_COLORS"));
         assert!(!QML_SOURCE.contains("D2B_WLCONTROL_HOST_ACCENT"));

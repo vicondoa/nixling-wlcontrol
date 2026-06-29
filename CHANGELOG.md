@@ -41,6 +41,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Configurable popup palette.** The Quickshell popup now accepts a
+  Stylix-agnostic `[theme]` palette for neutral shell colors while keeping d2b
+  state, environment, and VM-border accents sourced from d2b's UI artifact.
 - **d2b audio controls.** The public-socket client now consumes d2b
   `AudioStatus` and dispatches daemon-native audio mutations for microphone
   toggle, speaker toggle, speaker volume, microphone gain, and all-audio-off

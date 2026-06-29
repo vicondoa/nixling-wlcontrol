@@ -34,6 +34,25 @@ enabled = true
 url = "http://sys-obs:8080"
 browser_argv = ["xdg-open"]
 
+[theme]
+# Generic shell palette for the Quickshell popup. This is intentionally
+# independent of any specific theming system; Nix/Home Manager/Stylix users can
+# render their chosen palette into these normalized #rrggbb fields.
+background = "#0f1117"
+surface = "#16181d"
+surface_alt = "#2a2d35"
+foreground = "#cdd6f4"
+foreground_strong = "#ffffff"
+foreground_disabled = "#bac2de"
+muted = "#9399b2"
+border = "#2a2d35"
+inverse_foreground = "#000000"
+success_surface = "#1a2e1a"
+warning_surface = "#2e2a1a"
+error_surface = "#2e1a1a"
+input_background = "#0d0d0d"
+slider_track = "#252832"
+
 [[quick_launch]]
 id = "run-openterface"
 vm = "work-ssd"
@@ -58,6 +77,7 @@ guest_argv = ["/run/current-system/sw/bin/openterface-run"]
 | `observability.enabled` | bool | `true` | Whether to show/use the observability portal action. |
 | `observability.url` | string | `http://sys-obs:8080` | Signoz portal URL opened by the header button. |
 | `observability.browser_argv` | array of string | `["xdg-open"]` | Browser/open command prefix for `observability.url`. |
+| `theme.*` | `#rrggbb` string | see example | Stylix-agnostic Quickshell shell palette fields. |
 | `quick_launch[]` | table array | `[]` | Per-VM custom quick-launch icon. Fields: `id`, `vm`, `icon`, `tooltip`, `guest_argv`. |
 
 ## Terminal command is argv, not a shell string
@@ -87,6 +107,15 @@ The observability button opens `observability.url` with
 button/action. It does not read Signoz credentials, generate cookies, or perform
 auto-login; if your browser is already logged in, that session is reused by the
 browser.
+
+## Quickshell popup palette
+
+The `[theme]` table controls only neutral shell colors for the popup: panel
+backgrounds, card surfaces, text, muted text, borders, and input/slider fills.
+d2b-owned state, environment, and VM-border accents still come from d2b's
+generated UI color artifact. Theme values must be normalized lowercase
+`#rrggbb` strings so errors are caught at config load instead of silently
+falling back.
 
 ## Per-VM quick-launch icons
 

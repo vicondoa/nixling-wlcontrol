@@ -58,6 +58,8 @@ pub struct Config {
     pub terminal: TerminalConfig,
     /// Observability portal launch configuration.
     pub observability: ObservabilityConfig,
+    /// Shell palette for the Quickshell popup.
+    pub theme: ThemeConfig,
     /// Per-VM custom guest quick-launch icons.
     pub quick_launch: Vec<QuickLaunchConfig>,
     /// Path to d2b's resolved UI color JSON artifact.
@@ -144,6 +146,26 @@ pub struct ObservabilityConfig {
     pub success_message: String,
 }
 
+/// Stylix-agnostic shell colors for the Quickshell popup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct ThemeConfig {
+    pub background: String,
+    pub surface: String,
+    pub surface_alt: String,
+    pub foreground: String,
+    pub foreground_strong: String,
+    pub foreground_disabled: String,
+    pub muted: String,
+    pub border: String,
+    pub inverse_foreground: String,
+    pub success_surface: String,
+    pub warning_surface: String,
+    pub error_surface: String,
+    pub input_background: String,
+    pub slider_track: String,
+}
+
 /// A per-VM quick-launch icon that runs a detached guest command.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
@@ -172,6 +194,7 @@ impl Default for Config {
             hidden_vms: Vec::new(),
             terminal: TerminalConfig::default(),
             observability: ObservabilityConfig::default(),
+            theme: ThemeConfig::default(),
             quick_launch: Vec::new(),
             color_artifact_path: DEFAULT_COLOR_ARTIFACT_PATH.to_owned(),
         }
@@ -195,6 +218,27 @@ impl Default for ObservabilityConfig {
             url: Some("http://sys-obs:8080".to_owned()),
             browser_argv: vec!["xdg-open".to_owned()],
             success_message: "Opened observability portal".to_owned(),
+        }
+    }
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            background: "#0f1117".to_owned(),
+            surface: "#16181d".to_owned(),
+            surface_alt: "#2a2d35".to_owned(),
+            foreground: "#cdd6f4".to_owned(),
+            foreground_strong: "#ffffff".to_owned(),
+            foreground_disabled: "#bac2de".to_owned(),
+            muted: "#9399b2".to_owned(),
+            border: "#2a2d35".to_owned(),
+            inverse_foreground: "#000000".to_owned(),
+            success_surface: "#1a2e1a".to_owned(),
+            warning_surface: "#2e2a1a".to_owned(),
+            error_surface: "#2e1a1a".to_owned(),
+            input_background: "#0d0d0d".to_owned(),
+            slider_track: "#252832".to_owned(),
         }
     }
 }
@@ -232,6 +276,13 @@ impl Config {
             return Err(WlError::Config(
                 "observability.browser_argv must contain at least one argv element".into(),
             ));
+        }
+        for (field, value) in self.theme.color_fields() {
+            if !is_lower_hex_color(value) {
+                return Err(WlError::Config(format!(
+                    "theme.{field} must be a normalized #rrggbb color"
+                )));
+            }
         }
         for item in &self.quick_launch {
             if item.id.trim().is_empty() {
@@ -283,6 +334,27 @@ impl Config {
                 Ok(config)
             }
         }
+    }
+}
+
+impl ThemeConfig {
+    fn color_fields(&self) -> [(&'static str, &str); 14] {
+        [
+            ("background", &self.background),
+            ("surface", &self.surface),
+            ("surface_alt", &self.surface_alt),
+            ("foreground", &self.foreground),
+            ("foreground_strong", &self.foreground_strong),
+            ("foreground_disabled", &self.foreground_disabled),
+            ("muted", &self.muted),
+            ("border", &self.border),
+            ("inverse_foreground", &self.inverse_foreground),
+            ("success_surface", &self.success_surface),
+            ("warning_surface", &self.warning_surface),
+            ("error_surface", &self.error_surface),
+            ("input_background", &self.input_background),
+            ("slider_track", &self.slider_track),
+        ]
     }
 }
 
@@ -413,6 +485,8 @@ mod tests {
             c.observability.success_message,
             "Opened observability portal"
         );
+        assert_eq!(c.theme.background, "#0f1117");
+        assert_eq!(c.theme.foreground_strong, "#ffffff");
         assert!(c.quick_launch.is_empty());
     }
 
@@ -444,6 +518,44 @@ color_artifact_path = "/tmp/d2b-ui-colors.json"
         )
         .expect("parse config");
         assert_eq!(c.color_artifact_path, "/tmp/d2b-ui-colors.json");
+    }
+
+    #[test]
+    fn parses_theme_palette() {
+        let c = Config::from_toml(
+            r##"
+[theme]
+background = "#010203"
+surface = "#111213"
+surface_alt = "#212223"
+foreground = "#313233"
+foreground_strong = "#414243"
+foreground_disabled = "#515253"
+muted = "#616263"
+border = "#717273"
+inverse_foreground = "#818283"
+success_surface = "#919293"
+warning_surface = "#a1a2a3"
+error_surface = "#b1b2b3"
+input_background = "#c1c2c3"
+slider_track = "#d1d2d3"
+"##,
+        )
+        .expect("parse theme");
+        assert_eq!(c.theme.background, "#010203");
+        assert_eq!(c.theme.slider_track, "#d1d2d3");
+    }
+
+    #[test]
+    fn rejects_malformed_theme_color() {
+        let err = Config::from_toml(
+            r##"
+[theme]
+background = "#ABCDEF"
+"##,
+        )
+        .expect_err("theme colors should be normalized lowercase hex");
+        assert!(matches!(err, WlError::Config(msg) if msg.contains("theme.background")));
     }
 
     #[test]
